@@ -112,6 +112,18 @@ target_compile_options(test_m6 PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra>
 )
 catch_discover_tests(test_m6)
-
-
-
+# ---- M7: multiple access (CDMA, TDMA, FDMA), protocol (framer, ARQ, OSI/TCP-IP) ----
+add_executable(test_m7 test_m7.cpp)
+target_link_libraries(test_m7
+    PRIVATE
+        engine
+        Catch2::Catch2WithMain
+        Threads::Threads
+)
+target_include_directories(test_m7 PRIVATE
+    ${CMAKE_SOURCE_DIR}
+)
+target_compile_options(test_m7 PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra>
+)
+catch_discover_tests(test_m7)

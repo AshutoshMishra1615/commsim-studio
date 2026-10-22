@@ -45,6 +45,12 @@
 #include "blocks/analog/am.hpp"
 #include "blocks/analog/fm.hpp"
 #include "blocks/analog/pm.hpp"
+#include "blocks/multiple_access/cdma.hpp"
+#include "blocks/multiple_access/tdma.hpp"
+#include "blocks/multiple_access/fdma.hpp"
+#include "blocks/protocol/framer.hpp"
+#include "blocks/protocol/arq.hpp"
+#include "blocks/protocol/packet_encap.hpp"
 
 // ============================================================
 // Constants & Helpers
@@ -687,6 +693,90 @@ int main(int /*argc*/, char** /*argv*/)
         ImGui::SliderInt("Quantizer Bits N", &pcm_n_bits, 2, 12);
         const double pcm_sqnr = 6.0206 * pcm_n_bits + 1.7609;
         ImGui::Text("Theoretical SQNR (6.02*N + 1.76): %.2f dB", pcm_sqnr);
+
+        ImGui::End();
+
+        // ----------------------------------------------------
+        // Panel 9: Protocol & Multiple Access (M7)
+        // ----------------------------------------------------
+        ImGui::Begin("Protocol & Multiple Access (M7)");
+
+        if (ImGui::CollapsingHeader("OSI / TCP-IP Encapsulation View", ImGuiTreeNodeFlags_DefaultOpen)) {
+            static char app_buf[256] = "GET /index.html HTTP/1.1\r\nHost: commsim.local";
+            ImGui::InputText("App Payload", app_buf, sizeof(app_buf));
+
+            auto encap = blocks::PacketEncap::encapsulate(app_buf);
+            ImGui::Text("Total Frame: %zu bytes (Eth: 14B, IPv4: 20B, TCP: 20B, App: %zuB, FCS: 4B)",
+                        encap.raw_ethernet_frame.size(), encap.app_len);
+
+            if (ImGui::BeginTable("encap_table", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                ImGui::TableSetupColumn("Layer");
+                ImGui::TableSetupColumn("Field");
+                ImGui::TableSetupColumn("Offset");
+                ImGui::TableSetupColumn("Raw Hex");
+                ImGui::TableSetupColumn("Decoded Value");
+                ImGui::TableHeadersRow();
+
+                for (const auto& f : encap.fields) {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    if (f.layer == "Application") ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%s", f.layer.c_str());
+                    else if (f.layer == "TCP")   ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "%s", f.layer.c_str());
+                    else if (f.layer == "IPv4")  ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "%s", f.layer.c_str());
+                    else                         ImGui::TextColored(ImVec4(0.9f, 0.5f, 0.9f, 1.0f), "%s", f.layer.c_str());
+
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::Text("%s", f.name.c_str());
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::Text("%zu (%zuB)", f.byte_offset, f.byte_length);
+                    ImGui::TableSetColumnIndex(3);
+                    ImGui::Text("%s", f.hex_value.c_str());
+                    ImGui::TableSetColumnIndex(4);
+                    ImGui::Text("%s", f.decoded_value.c_str());
+                }
+                ImGui::EndTable();
+            }
+        }
+
+        if (ImGui::CollapsingHeader("ARQ Protocols: Stop-and-Wait & Go-Back-N", ImGuiTreeNodeFlags_DefaultOpen)) {
+            static float arq_pf = 0.15f;
+            static float arq_a  = 0.5f;
+            static int   arq_w  = 4;
+
+            ImGui::SliderFloat("Frame Loss Prob Pf", &arq_pf, 0.0f, 0.8f, "%.2f");
+            ImGui::SliderFloat("Normalized Delay a (t_prop/t_frame)", &arq_a, 0.0f, 3.0f, "%.2f");
+            ImGui::SliderInt("Window Size W (GBN)", &arq_w, 1, 16);
+
+            const double sw_th = blocks::StopAndWaitArq::theoryEfficiency(arq_pf, arq_a);
+            const double gbn_th = blocks::GoBackNArq::theoryEfficiency(arq_pf, arq_a, arq_w);
+
+            ImGui::Text("Stop-and-Wait Theory (1-Pf)/(1+2a): %.4f (%.1f%%)", sw_th, sw_th * 100.0);
+            ImGui::Text("Go-Back-N Theory (Stallings 7.6):   %.4f (%.1f%%)", gbn_th, gbn_th * 100.0);
+
+            if (ImGui::Button("Run Quick Simulation (10,000 frames)")) {
+                const double sw_sim = blocks::StopAndWaitArq::simulate(arq_pf, arq_a, 10000);
+                const double gbn_sim = blocks::GoBackNArq::simulate(arq_pf, arq_a, arq_w, 10000);
+                std::printf("[ARQ Live Sim] S&W: %.4f (err=%.2f%%) | GBN: %.4f (err=%.2f%%)\n",
+                            sw_sim, std::abs(sw_sim - sw_th)/sw_th * 100.0,
+                            gbn_sim, std::abs(gbn_sim - gbn_th)/gbn_th * 100.0);
+            }
+        }
+
+        if (ImGui::CollapsingHeader("CDMA Multi-User Interference (Walsh vs PN)", ImGuiTreeNodeFlags_DefaultOpen)) {
+            static int cdma_users = 12;
+            static bool cdma_walsh = true;
+            ImGui::SliderInt("Active Users U", &cdma_users, 1, 16);
+            ImGui::Checkbox("Orthogonal Walsh Codes (Zero MUI)", &cdma_walsh);
+
+            if (cdma_walsh) {
+                ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f),
+                                   "Walsh Spreading (SF=16): MUI = 0.000 across all %d users (<w_i, w_j> = 0)", cdma_users);
+            } else {
+                const double mui_var = static_cast<double>(cdma_users - 1) / 16.0;
+                ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                                   "PN Spreading (SF=16): MUI Variance = (U-1)/SF = %.4f (BER rises monotonically)", mui_var);
+            }
+        }
 
         ImGui::End();
 
