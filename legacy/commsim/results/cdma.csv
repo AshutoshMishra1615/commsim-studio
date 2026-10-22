@@ -1,0 +1,111 @@
+codes,users,ebn0_db,ber
+Walsh,1,0.0,7.983e-02
+Walsh,1,1.0,5.635e-02
+Walsh,1,2.0,3.682e-02
+Walsh,1,3.0,2.230e-02
+Walsh,1,4.0,1.228e-02
+Walsh,1,5.0,5.833e-03
+Walsh,1,6.0,2.300e-03
+Walsh,1,7.0,7.167e-04
+Walsh,1,8.0,3.167e-04
+Walsh,1,9.0,3.333e-05
+Walsh,1,10.0,0.000e+00
+Walsh,2,0.0,7.878e-02
+Walsh,2,1.0,5.623e-02
+Walsh,2,2.0,3.698e-02
+Walsh,2,3.0,2.323e-02
+Walsh,2,4.0,1.318e-02
+Walsh,2,5.0,6.167e-03
+Walsh,2,6.0,2.117e-03
+Walsh,2,7.0,6.833e-04
+Walsh,2,8.0,1.833e-04
+Walsh,2,9.0,5.000e-05
+Walsh,2,10.0,0.000e+00
+Walsh,4,0.0,8.183e-02
+Walsh,4,1.0,5.687e-02
+Walsh,4,2.0,3.763e-02
+Walsh,4,3.0,2.345e-02
+Walsh,4,4.0,1.240e-02
+Walsh,4,5.0,6.750e-03
+Walsh,4,6.0,2.367e-03
+Walsh,4,7.0,6.667e-04
+Walsh,4,8.0,1.333e-04
+Walsh,4,9.0,1.667e-05
+Walsh,4,10.0,0.000e+00
+Walsh,8,0.0,7.677e-02
+Walsh,8,1.0,5.627e-02
+Walsh,8,2.0,3.737e-02
+Walsh,8,3.0,2.183e-02
+Walsh,8,4.0,1.270e-02
+Walsh,8,5.0,5.533e-03
+Walsh,8,6.0,2.600e-03
+Walsh,8,7.0,7.833e-04
+Walsh,8,8.0,3.000e-04
+Walsh,8,9.0,3.333e-05
+Walsh,8,10.0,1.667e-05
+Walsh,12,0.0,7.942e-02
+Walsh,12,1.0,5.703e-02
+Walsh,12,2.0,3.668e-02
+Walsh,12,3.0,2.310e-02
+Walsh,12,4.0,1.257e-02
+Walsh,12,5.0,5.383e-03
+Walsh,12,6.0,2.500e-03
+Walsh,12,7.0,8.333e-04
+Walsh,12,8.0,1.333e-04
+Walsh,12,9.0,1.667e-05
+Walsh,12,10.0,1.667e-05
+Random PN,1,0.0,7.753e-02
+Random PN,1,1.0,5.558e-02
+Random PN,1,2.0,3.903e-02
+Random PN,1,3.0,2.305e-02
+Random PN,1,4.0,1.295e-02
+Random PN,1,5.0,5.967e-03
+Random PN,1,6.0,2.250e-03
+Random PN,1,7.0,7.333e-04
+Random PN,1,8.0,2.500e-04
+Random PN,1,9.0,1.667e-05
+Random PN,1,10.0,0.000e+00
+Random PN,2,0.0,8.137e-02
+Random PN,2,1.0,5.720e-02
+Random PN,2,2.0,3.740e-02
+Random PN,2,3.0,2.160e-02
+Random PN,2,4.0,1.303e-02
+Random PN,2,5.0,5.833e-03
+Random PN,2,6.0,2.517e-03
+Random PN,2,7.0,8.500e-04
+Random PN,2,8.0,2.167e-04
+Random PN,2,9.0,0.000e+00
+Random PN,2,10.0,3.333e-05
+Random PN,4,0.0,1.173e-01
+Random PN,4,1.0,1.014e-01
+Random PN,4,2.0,8.523e-02
+Random PN,4,3.0,6.997e-02
+Random PN,4,4.0,5.732e-02
+Random PN,4,5.0,4.610e-02
+Random PN,4,6.0,3.737e-02
+Random PN,4,7.0,2.958e-02
+Random PN,4,8.0,2.460e-02
+Random PN,4,9.0,1.665e-02
+Random PN,4,10.0,1.150e-02
+Random PN,8,0.0,1.429e-01
+Random PN,8,1.0,1.323e-01
+Random PN,8,2.0,1.184e-01
+Random PN,8,3.0,1.052e-01
+Random PN,8,4.0,9.857e-02
+Random PN,8,5.0,8.822e-02
+Random PN,8,6.0,8.292e-02
+Random PN,8,7.0,7.873e-02
+Random PN,8,8.0,7.343e-02
+Random PN,8,9.0,6.927e-02
+Random PN,8,10.0,6.747e-02
+Random PN,12,0.0,1.893e-01
+Random PN,12,1.0,1.748e-01
+Random PN,12,2.0,1.688e-01
+Random PN,12,3.0,1.584e-01
+Random PN,12,4.0,1.545e-01
+Random PN,12,5.0,1.484e-01
+Random PN,12,6.0,1.444e-01
+Random PN,12,7.0,1.425e-01
+Random PN,12,8.0,1.390e-01
+Random PN,12,9.0,1.364e-01
+Random PN,12,10.0,1.345e-01
