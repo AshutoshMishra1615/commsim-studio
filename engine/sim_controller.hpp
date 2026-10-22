@@ -29,6 +29,8 @@
 #include "../blocks/mapping/qam16.hpp"
 #include "../blocks/mapping/qpsk.hpp"
 #include "../blocks/probe/waveform_probe.hpp"
+#include "../blocks/probe/constellation_probe.hpp"
+#include "../blocks/probe/eye_probe.hpp"
 #include "../blocks/source/passthrough.hpp"
 #include "../blocks/source/prbs.hpp"
 
@@ -79,7 +81,9 @@ class SimController {
 public:
     explicit SimController(size_t chunk_size = 4096, uint64_t seed = 42)
         : chunk_size_(chunk_size), seed_(seed) {
-        waveform_buffer_ = std::make_shared<TripleBuffer<blocks::WaveformSnapshot>>();
+        waveform_buffer_      = std::make_shared<TripleBuffer<blocks::WaveformSnapshot>>();
+        constellation_buffer_ = std::make_shared<TripleBuffer<blocks::ConstellationSnapshot>>();
+        eye_buffer_           = std::make_shared<TripleBuffer<blocks::EyeSnapshot>>();
         buildGraph(current_scheme_);
     }
 
@@ -169,6 +173,14 @@ public:
         return waveform_buffer_;
     }
 
+    std::shared_ptr<TripleBuffer<blocks::ConstellationSnapshot>> getConstellationBuffer() const {
+        return constellation_buffer_;
+    }
+
+    std::shared_ptr<TripleBuffer<blocks::EyeSnapshot>> getEyeBuffer() const {
+        return eye_buffer_;
+    }
+
     /// Run N chunks synchronously
     void runSynchronous(size_t chunks) {
         processCommands();
@@ -223,6 +235,8 @@ private:
                 case Command::Type::ResetStats:
                     if (ber_probe_) ber_probe_->reset();
                     if (waveform_probe_) waveform_probe_->reset();
+                    if (constellation_probe_) constellation_probe_->reset();
+                    if (eye_probe_) eye_probe_->reset();
                     break;
             }
         }
@@ -275,6 +289,14 @@ private:
         waveform_probe_ = wf_block.get();
         auto wf_id = g->add(std::move(wf_block));
 
+        auto constel_block = std::make_unique<blocks::ConstellationProbe>(constellation_buffer_);
+        constellation_probe_ = constel_block.get();
+        auto constel_id = g->add(std::move(constel_block));
+
+        auto eye_block = std::make_unique<blocks::EyeProbe>(eye_buffer_);
+        eye_probe_ = eye_block.get();
+        auto eye_id = g->add(std::move(eye_block));
+
         auto ber_block = std::make_unique<BerProbe>();
         ber_probe_ = ber_block.get();
         auto probe_id = g->add(std::move(ber_block));
@@ -285,7 +307,9 @@ private:
         g->connect(fork_id, 1, probe_id, 0);   // TX bits
         g->connect(mod_id, 0, awgn_id, 0);
         g->connect(awgn_id, 0, wf_id, 0);       // Tap noisy symbols to waveform probe
-        g->connect(wf_id, 0, demod_id, 0);
+        g->connect(wf_id, 0, constel_id, 0);   // Tap to constellation probe
+        g->connect(constel_id, 0, eye_id, 0);  // Tap to eye probe
+        g->connect(eye_id, 0, demod_id, 0);
         g->connect(demod_id, 0, probe_id, 1);  // RX bits
 
         // Apply parameters
@@ -347,7 +371,11 @@ private:
     std::unique_ptr<Graph> graph_;
     BerProbe* ber_probe_ = nullptr;
     blocks::WaveformProbe* waveform_probe_ = nullptr;
+    blocks::ConstellationProbe* constellation_probe_ = nullptr;
+    blocks::EyeProbe* eye_probe_ = nullptr;
     std::shared_ptr<TripleBuffer<blocks::WaveformSnapshot>> waveform_buffer_;
+    std::shared_ptr<TripleBuffer<blocks::ConstellationSnapshot>> constellation_buffer_;
+    std::shared_ptr<TripleBuffer<blocks::EyeSnapshot>> eye_buffer_;
 
     Scheme current_scheme_ = Scheme::BPSK;
     std::atomic<double> ebn0_db_{6.0};

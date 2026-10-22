@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.20)
 add_executable(commsim_studio main.cpp)
 target_link_libraries(commsim_studio
     PRIVATE
+        render
         engine
         implot_lib
         imgui_lib

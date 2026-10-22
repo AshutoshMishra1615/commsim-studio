@@ -1,13 +1,17 @@
 /**
- * app/main.cpp -- M2 Viewer v1
+ * app/main.cpp -- M3 Viewer
  *
- * Implements M2 Viewer with SDL2, OpenGL 3.3 Core, Dear ImGui, and ImPlot.
+ * Implements M3 Viewer with SDL2, OpenGL 3.3 Core, Dear ImGui, ImPlot,
+ * and GPU Density Renderer (phosphor persistence for constellation and eye diagrams).
  * Features:
  *   - Background simulation thread running the signal graph (SimController)
- *   - Wait-free TripleBuffer transferring real-time waveforms
+ *   - Wait-free TripleBuffers transferring waveforms, constellation symbols, and eye samples
  *   - Real-time controls: modulation scheme, Eb/N0 slider, run/pause, reset stats
  *   - ImPlot time-domain Waveform panel (I & Q)
  *   - ImPlot BER curve readout with theoretical curves and operating point marker
+ *   - GPU Density Renderer Constellation Panel (16-QAM clusters at 10 dB)
+ *   - GPU Density Renderer Eye Diagram Panel (2 T_sym symbol transitions)
+ *   - Multiple colormaps: Turbo, Phosphor Green, Inferno, Viridis
  *   - Performance telemetry (Msym/s, FPS, slider change latency)
  */
 #include <SDL.h>
@@ -30,12 +34,13 @@
 #include <vector>
 
 #include "engine/sim_controller.hpp"
+#include "render/density_renderer.hpp"
 
 // ============================================================
 // Constants & Helpers
 // ============================================================
-static constexpr int   WIN_W   = 1400;
-static constexpr int   WIN_H   = 850;
+static constexpr int   WIN_W   = 1600;
+static constexpr int   WIN_H   = 900;
 static constexpr float CLEAR_R = 0.08f;
 static constexpr float CLEAR_G = 0.09f;
 static constexpr float CLEAR_B = 0.12f;
@@ -127,8 +132,18 @@ int main(int /*argc*/, char** /*argv*/)
     sim.setTargetRate(1.0); // 1.0 Msym/s target
     sim.start();
 
+    // GPU Density Renderers for Constellation and Eye diagrams
+    render::DensityRenderer constel_renderer(384, 384);
+    constel_renderer.setDecay(0.92f);
+    constel_renderer.setScale(1.8f);
+
+    render::DensityRenderer eye_renderer(384, 256);
+    eye_renderer.setDecay(0.92f);
+    eye_renderer.setScale(1.8f);
+    eye_renderer.setColormap(render::Colormap::Phosphor);
+
     // Local UI state
-    float ui_ebn0 = 6.0f;
+    float ui_ebn0 = 10.0f;
     int current_scheme_idx = 0;
     const char* scheme_names[] = { "BPSK", "QPSK", "16-QAM", "BFSK", "OOK" };
     const engine::Scheme scheme_enums[] = {
@@ -185,7 +200,11 @@ int main(int /*argc*/, char** /*argv*/)
 
             if (ImGui::BeginMenuBar()) {
                 if (ImGui::BeginMenu("File")) {
-                    if (ImGui::MenuItem("Reset Statistics", "Ctrl+R")) sim.resetStats();
+                    if (ImGui::MenuItem("Reset Statistics", "Ctrl+R")) {
+                        sim.resetStats();
+                        constel_renderer.clear();
+                        eye_renderer.clear();
+                    }
                     ImGui::Separator();
                     if (ImGui::MenuItem("Quit", "Alt+F4")) running = false;
                     ImGui::EndMenu();
@@ -217,6 +236,28 @@ int main(int /*argc*/, char** /*argv*/)
             curve_ber[i] = std::max(1e-7, theoreticalBer(scheme_enums[current_scheme_idx], curve_snr[i]));
         }
 
+        // Update constellation density renderer from simulation stream
+        auto constel_buf = sim.getConstellationBuffer();
+        if (constel_buf && constel_buf->has_new()) {
+            const auto& c_snap = constel_buf->read_buffer();
+            if (!c_snap.symbols.empty()) {
+                constel_renderer.decay();
+                constel_renderer.accumulateConstellation(c_snap.symbols.data(), c_snap.symbols.size());
+            }
+        }
+        uint32_t constel_tex = constel_renderer.render();
+
+        // Update eye diagram density renderer from simulation stream
+        auto eye_buf = sim.getEyeBuffer();
+        if (eye_buf && eye_buf->has_new()) {
+            const auto& e_snap = eye_buf->read_buffer();
+            if (!e_snap.times.empty()) {
+                eye_renderer.decay();
+                eye_renderer.accumulateEye(e_snap.times.data(), e_snap.amplitudes.data(), e_snap.times.size());
+            }
+        }
+        uint32_t eye_tex = eye_renderer.render();
+
         // ----------------------------------------------------
         // Panel 1: Simulation Controls & Telemetry
         // ----------------------------------------------------
@@ -226,6 +267,8 @@ int main(int /*argc*/, char** /*argv*/)
         if (ImGui::Combo("##Scheme", &current_scheme_idx, scheme_names, IM_ARRAYSIZE(scheme_names))) {
             sim.setScheme(scheme_enums[current_scheme_idx]);
             sim.resetStats();
+            constel_renderer.clear();
+            eye_renderer.clear();
         }
 
         ImGui::Separator();
@@ -244,6 +287,8 @@ int main(int /*argc*/, char** /*argv*/)
         ImGui::SameLine();
         if (ImGui::Button("Reset Stats", ImVec2(100, 0))) {
             sim.resetStats();
+            constel_renderer.clear();
+            eye_renderer.clear();
         }
 
         ImGui::Separator();
@@ -312,6 +357,55 @@ int main(int /*argc*/, char** /*argv*/)
             }
 
             ImPlot::EndPlot();
+        }
+        ImGui::End();
+
+        // ----------------------------------------------------
+        // Panel 4: Constellation Diagram (GPU Density Renderer)
+        // ----------------------------------------------------
+        ImGui::Begin("Constellation Diagram");
+        ImGui::Text("Phosphor Density Persistence (16-QAM Clusters)");
+        if (constel_tex != 0) {
+            ImGui::Image((ImTextureID)(intptr_t)constel_tex, ImVec2(384, 384));
+        } else {
+            ImGui::TextDisabled("Awaiting constellation data...");
+        }
+
+        static int constel_cm_idx = 0;
+        const char* cm_names[] = { "Turbo", "Phosphor", "Inferno", "Viridis" };
+        if (ImGui::Combo("Colormap##Constel", &constel_cm_idx, cm_names, IM_ARRAYSIZE(cm_names))) {
+            constel_renderer.setColormap(static_cast<render::Colormap>(constel_cm_idx));
+        }
+        static float constel_decay = 0.92f;
+        if (ImGui::SliderFloat("Decay##Constel", &constel_decay, 0.70f, 0.99f, "%.2f")) {
+            constel_renderer.setDecay(constel_decay);
+        }
+        if (ImGui::Button("Clear Constellation")) {
+            constel_renderer.clear();
+        }
+        ImGui::End();
+
+        // ----------------------------------------------------
+        // Panel 5: Eye Diagram (GPU Density Renderer)
+        // ----------------------------------------------------
+        ImGui::Begin("Eye Diagram");
+        ImGui::Text("Symbol Transition Persistence (2 T_sym)");
+        if (eye_tex != 0) {
+            ImGui::Image((ImTextureID)(intptr_t)eye_tex, ImVec2(384, 256));
+        } else {
+            ImGui::TextDisabled("Awaiting eye diagram data...");
+        }
+
+        static int eye_cm_idx = 1; // Default Phosphor green
+        if (ImGui::Combo("Colormap##Eye", &eye_cm_idx, cm_names, IM_ARRAYSIZE(cm_names))) {
+            eye_renderer.setColormap(static_cast<render::Colormap>(eye_cm_idx));
+        }
+        static float eye_decay = 0.92f;
+        if (ImGui::SliderFloat("Decay##Eye", &eye_decay, 0.70f, 0.99f, "%.2f")) {
+            eye_renderer.setDecay(eye_decay);
+        }
+        if (ImGui::Button("Clear Eye")) {
+            eye_renderer.clear();
         }
         ImGui::End();
 

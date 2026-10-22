@@ -35,6 +35,7 @@ catch_discover_tests(test_engine)
 add_executable(test_viewer test_viewer.cpp)
 target_link_libraries(test_viewer
     PRIVATE
+        render
         engine
         Catch2::Catch2WithMain
         Threads::Threads
@@ -46,3 +47,20 @@ target_compile_options(test_viewer PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra>
 )
 catch_discover_tests(test_viewer)
+
+# ---- M3: GPU density renderer (1M pts/s at 60 FPS, 16-QAM at 10 dB) ----
+add_executable(test_density test_density.cpp)
+target_link_libraries(test_density
+    PRIVATE
+        render
+        engine
+        Catch2::Catch2WithMain
+        Threads::Threads
+)
+target_include_directories(test_density PRIVATE
+    ${CMAKE_SOURCE_DIR}
+)
+target_compile_options(test_density PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra>
+)
+catch_discover_tests(test_density)

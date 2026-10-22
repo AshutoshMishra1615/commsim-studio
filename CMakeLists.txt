@@ -117,6 +117,11 @@ target_link_libraries(commsim_legacy INTERFACE Threads::Threads)
 add_subdirectory(engine)
 
 # --------------------------------------------------------------------------
+# Render (M3): GPU Density Renderer, GL Context, Shaders
+# --------------------------------------------------------------------------
+add_subdirectory(render)
+
+# --------------------------------------------------------------------------
 # Tests
 # --------------------------------------------------------------------------
 enable_testing()
