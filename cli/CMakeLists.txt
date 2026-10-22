@@ -12,3 +12,10 @@ target_include_directories(commsim_cli PRIVATE
 target_compile_options(commsim_cli PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
 )
+
+add_custom_command(TARGET commsim_cli POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E create_symlink
+        $<TARGET_FILE_NAME:commsim_cli>
+        $<TARGET_FILE_DIR:commsim_cli>/sweep
+)
+

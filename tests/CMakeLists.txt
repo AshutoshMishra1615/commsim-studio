@@ -127,3 +127,20 @@ target_compile_options(test_m7 PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra>
 )
 catch_discover_tests(test_m7)
+
+# ---- M8: polish, performance targets, and report validation ----
+add_executable(test_m8 test_m8.cpp)
+target_link_libraries(test_m8
+    PRIVATE
+        engine
+        Catch2::Catch2WithMain
+        Threads::Threads
+)
+target_include_directories(test_m8 PRIVATE
+    ${CMAKE_SOURCE_DIR}
+)
+target_compile_options(test_m8 PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra>
+)
+catch_discover_tests(test_m8)
+

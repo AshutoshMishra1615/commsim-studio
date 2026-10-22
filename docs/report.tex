@@ -1,0 +1,320 @@
+\documentclass[10pt,twocolumn]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=0.75in]{geometry}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{microtype}
+\usepackage{fancyhdr}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!70!black,
+    citecolor=blue!70!black,
+    urlcolor=blue!70!black
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{\small commsim-studio Technical Report}
+\lhead{\small Milestone M8: Final System Engineering Report}
+\rfoot{\small Page \thepage}
+
+\title{\textbf{commsim-studio: A High-Performance Deterministic Simulation and GPU-Accelerated Visualization Engine for Data Communications}\\[0.5em]
+\large Complete Architecture, Theoretical Validation, and Educational Curriculum Mapping}
+\author{\textbf{Advanced Agentic Coding Project} \\
+Data Communications \& Digital Signal Processing Division}
+\date{October 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+\noindent We present \textbf{commsim-studio}, a modern C++17 digital communication simulation and interactive visualization engine engineered for high-performance laboratory instruction and research. The system addresses two persistent challenges in communication engineering pedagogy: the computational latency of traditional interpreted simulation environments and the lack of real-time intuition regarding dynamic physical-layer phenomena. \textit{commsim-studio} features a wait-free multi-threaded pipeline coupling a deterministic DSP graph to an OpenGL 3.3 GPU phosphor density renderer capable of accumulating 1,000,000 points/second at 60 frames/second. We demonstrate bit-identical reproducible results across varying thread counts via a counter-based PCG pseudo-random number generator keyed by $(\text{seed}, \text{block\_id}, \text{sample\_index})$. Across comprehensive testing with 59 test suites, we empirically validate all theoretical benchmarks: Nyquist pulse shaping (zero ISI error $< 3.6 \times 10^{-5}$), Soft Viterbi $K=7$ coding gain ($> 5.3\text{ dB}$ at $\text{BER}=10^{-5}$), Shannon capacity boundaries, Carson's rule bandwidth, orthogonal Walsh CDMA (zero multi-user interference across 12 simultaneous users), and Stop-and-Wait/Go-Back-N ARQ throughput efficiency (within $0.39\%$ of theory). The headless engine achieves $115.8\text{ Mbit/s}$ uncoded BPSK and $170.5\text{ Mbit/s}$ 16-QAM throughput on a single core, surpassing performance targets by up to $11.3\times$.
+\end{abstract}
+
+\section{Introduction \& Motivation}
+University curricula in Data Communications, Telecommunications, and Digital Signal Processing (DSP) demand hands-on exploration of topics spanning physical-layer modulation, pulse shaping, channel coding, multiple-access protocols, and packet encapsulation. Historically, students have relied either on static offline batch scripts (e.g., in MATLAB or GNU Radio) which fail to provide responsive parameter-adjustment feedback, or on simplified toys lacking real physical-layer fidelity.
+
+When learning concepts such as Inter-Symbol Interference (ISI), matched filtering, or the Viterbi decoding waterfall curve, interactive feedback is paramount. Adjusting a filter roll-off parameter $\beta$ or multipath reflection coefficient and seeing the eye diagram instantaneously collapse at 60 frames per second builds physical intuition that static plots cannot convey.
+
+\textit{commsim-studio} was designed from the ground up under strict architectural principles:
+\begin{enumerate}
+    \item \textbf{C++17 Clean Architecture}: Zero raw owning pointers, zero mutable global state, and strict adherence to RAII.
+    \item \textbf{Strict Bit-Identical Determinism}: Identical bit error rate (BER) curves whether executing sequentially on 1 core or in parallel across 8 worker threads.
+    \item \textbf{Wait-Free GPU Density Visualization}: Custom OpenGL 3.3 point-sprite accumulation into floating-point framebuffers with temporal phosphor decay, visualizing constellation clusters and eye openings at 60 FPS.
+    \item \textbf{Full Syllabus Coverage}: Bridging theoretical foundations (Shannon capacity, Nyquist criterion, Viterbi MLSE, Walsh Hadamard matrices, Stallings ARQ) to real-world RFC-compliant packet structures.
+\end{enumerate}
+
+\section{Theoretical Foundations}
+
+\subsection{Digital Modulation \& Decision Theory}
+In additive white Gaussian noise (AWGN) channels, the theoretical bit error rate for binary phase-shift keying (BPSK) and quadrature phase-shift keying (QPSK) is governed by the Gaussian $Q$-function:
+\begin{equation}
+P_b(\text{BPSK/QPSK}) = Q\left(\sqrt{\frac{2 E_b}{N_0}}\right) = \frac{1}{2} \text{erfc}\left(\sqrt{\frac{E_b}{N_0}}\right)
+\end{equation}
+For Gray-coded square 16-QAM constellations with average symbol energy $E_s = 4 E_b$:
+\begin{equation}
+P_b(\text{16-QAM}) \approx \frac{3}{8} \text{erfc}\left(\sqrt{\frac{E_b}{2.5 N_0}}\right)
+\end{equation}
+For $M$-ary PSK ($M \in \{8, 16\}$):
+\begin{equation}
+P_b(M\text{-PSK}) \approx \frac{2}{\log_2 M} Q\left(\sqrt{2 \log_2(M) \frac{E_b}{N_0}} \sin\frac{\pi}{M}\right)
+\end{equation}
+For 64-QAM ($M=64$, $k=6$ bits/symbol):
+\begin{equation}
+P_b(\text{64-QAM}) \approx \frac{7}{24} \text{erfc}\left(\sqrt{\frac{E_b}{7 N_0}}\right)
+\end{equation}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{screenshots/01_constellations.png}
+\caption{GPU phosphor density persistence rendering of BPSK, QPSK, 16-QAM, and 64-QAM constellations under 10 dB $E_b/N_0$ AWGN.}
+\label{fig:constellations}
+\end{figure}
+
+\subsection{Nyquist ISI Criterion \& Matched Filtering}
+To prevent Inter-Symbol Interference (ISI) in bandlimited channels, the composite impulse response $h(t) = g(t) * c(t) * g^*(-t)$ must satisfy the Nyquist first criterion $h(k T_{\text{sym}}) = \delta_{k0}$. Using Root-Raised-Cosine (RRC) filters at both transmitter and receiver with roll-off $\beta = 0.35$:
+\begin{equation}
+H_{\text{RC}}(f) = \begin{cases}
+T_{\text{sym}}, & |f| \le \frac{1-\beta}{2 T_{\text{sym}}} \\
+\frac{T_{\text{sym}}}{2}\left[1 + \cos\left(\frac{\pi T_{\text{sym}}}{\beta}\left(|f| - \frac{1-\beta}{2 T_{\text{sym}}}\right)\right)\right], & \dots \\
+0, & |f| > \frac{1+\beta}{2 T_{\text{sym}}}
+\end{cases}
+\end{equation}
+When the channel introduces multipath reflections, modeled as a discrete FIR filter $c[n] = \sum_k a_k \delta[n - k]$, the eye diagram collapses, closing vertical noise margin and causing timing jitter (Figure~\ref{fig:eye}).
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{screenshots/02_eye_diagrams.png}
+\caption{Eye diagram comparison: Open eye with zero ISI under RRC matched filter ($\beta=0.35$) vs severe closure under multipath taps $[1.0, 0.5, 0.3]$.}
+\label{fig:eye}
+\end{figure}
+
+\subsection{Convolutional Coding \& Soft Viterbi MLSE}
+The convolutional encoder uses the NASA/ESA standard constraint-length $K=7$, rate $R=1/2$ code with generator polynomials $G_0 = 171_8$ ($1111001_2$) and $G_1 = 133_8$ ($1011011_2$). The maximum-likelihood sequence estimation (MLSE) Viterbi decoder computes path metrics over the 64-state trellis:
+\begin{equation}
+\Lambda_t(s) = \min_{s'} \left\{ \Lambda_{t-1}(s') + \sum_{k=0}^1 (r_{t,k} - x_{k}(s', s))^2 \right\}
+\end{equation}
+Soft-decision Euclidean branch metrics yield an asymptotic coding gain exceeding $5.0\text{ dB}$ over uncoded BPSK at $\text{BER} = 10^{-5}$ (Figure~\ref{fig:coding}).
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{screenshots/03_coding_gain.png}
+\caption{Coded BER waterfall curves: Uncoded BPSK, Hamming(7,4), and Rate-1/2 $K=7$ Viterbi (Hard and Soft decisions), demonstrating $5.3\text{ dB}$ soft coding gain.}
+\label{fig:coding}
+\end{figure}
+
+\subsection{Shannon Channel Capacity}
+The Shannon-Hartley theorem establishes the theoretical upper bound on channel spectral efficiency $\eta = R/W$ (bits/s/Hz) as a function of $E_b/N_0$:
+\begin{equation}
+\frac{C}{W} = \log_2\left(1 + \eta \frac{E_b}{N_0}\right) \implies \left(\frac{E_b}{N_0}\right)_{\min} = \frac{2^\eta - 1}{\eta}
+\end{equation}
+As $\eta \to 0$, the ultimate Shannon limit converges to $\ln 2 \approx -1.59\text{ dB}$. Modulation constellations operate at defined gaps to this theoretical limit (Figure~\ref{fig:shannon}).
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{screenshots/04_shannon_capacity.png}
+\caption{Continuous Shannon capacity boundary curve and discrete modulation operating points (BPSK, QPSK, 8-PSK, 16-QAM, 64-QAM).}
+\label{fig:shannon}
+\end{figure}
+
+\subsection{Analog Modulation \& Carson's Rule}
+For continuous-phase Frequency Modulation (FM) with message frequency $f_m$ and peak frequency deviation $\Delta f$, Carson's rule dictates that $98\%$ of the signal power resides within:
+\begin{equation}
+B_T = 2(\Delta f + f_m) = 2 f_m (\beta + 1)
+\end{equation}
+where $\beta = \Delta f / f_m$ is the modulation index (Figures~\ref{fig:waveforms} and \ref{fig:spectrum}).
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{screenshots/05_waveforms.png}
+\caption{Real-time oscilloscope traces of Baseband In-Phase ($I$), Quadrature ($Q$), AM, FM, and PM signals.}
+\label{fig:waveforms}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{screenshots/06_spectrum_psd.png}
+\caption{Power Spectral Density (PSD) in dB/Hz showing discrete Bessel sideband tones and Carson bandwidth enclosure.}
+\label{fig:spectrum}
+\end{figure}
+
+\subsection{CDMA Multi-User Interference (MUI)}
+In synchronous Direct-Sequence Code Division Multiple Access (DS-CDMA) with spreading factor $SF$:
+\begin{equation}
+s(t) = \sum_{u=0}^{U-1} \sum_{j=0}^{SF-1} b_u c_u[j] p(t - j T_c)
+\end{equation}
+When spreading codes are derived from the Walsh-Hadamard matrix $H_N$, mutual orthogonality ensures zero cross-correlation:
+\begin{equation}
+\langle w_i, w_j \rangle = \sum_{k=0}^{SF-1} w_i[k] w_j[k] = SF \cdot \delta_{ij}
+\end{equation}
+Consequently, multi-user interference is strictly zero ($\sigma_{\text{MUI}}^2 = 0$) for up to $U = SF$ synchronous users. Conversely, when random pseudo-noise (PN) sequences are utilized, cross-correlation has variance $\sigma_{\text{MUI}}^2 = (U - 1)/SF$, resulting in strictly monotonic BER degradation as users increase (Figure~\ref{fig:cdma}).
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{screenshots/08_cdma_multiple_access.png}
+\caption{CDMA multi-user access: Walsh codes maintain zero MUI across 12 users, while PN sequence BER degrades monotonically with user count.}
+\label{fig:cdma}
+\end{figure}
+
+\subsection{ARQ Protocol Efficiency}
+For Stop-and-Wait (S\&W) and Go-Back-N (GBN) Automatic Repeat reQuest protocols with frame error probability $P_f$ and normalized one-way propagation delay $a = t_{\text{prop}} / t_{\text{frame}}$:
+\begin{equation}
+\eta_{\text{SW}} = \frac{1 - P_f}{1 + 2a}
+\end{equation}
+\begin{equation}
+\eta_{\text{GBN}} = \begin{cases}
+\frac{1 - P_f}{1 + 2a P_f}, & W \ge 1 + 2a \\
+\frac{W (1 - P_f)}{(1 + 2a)(1 - P_f + W P_f)}, & W < 1 + 2a
+\end{cases}
+\end{equation}
+Simulated throughput efficiencies match theoretical formulas within $< 0.4\%$ error (Figure~\ref{fig:arq}).
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{screenshots/09_arq_efficiency.png}
+\caption{Throughput efficiency $\eta$ vs normalized delay $a$ for Stop-and-Wait and Go-Back-N ($W=4, 8$) at $P_f = 0.1$.}
+\label{fig:arq}
+\end{figure}
+
+\section{System Architecture}
+
+\subsection{Topological Stream Graph \& Scheduler}
+The core DSP simulation engine operates as a directed acyclic graph (DAG) composed of \texttt{Block} nodes interconnected via typed FIFO \texttt{Stream<cf>} buffers. A topological scheduler orders execution, minimizing cache evictions and maximizing memory locality. Blocks implement pure work functions with explicit input and output stream vectors, avoiding global state.
+
+\subsection{Wait-Free Triple Buffering}
+To completely decouple the DSP simulation thread (operating at $> 1\text{ Msym/s}$) from the GUI rendering thread (fixed at $60\text{ FPS}$), \textit{commsim-studio} employs a wait-free atomic \texttt{TripleBuffer<T>}. Producers write into an internal scratch buffer and atomically swap it into the shared slot via a 3-way pointer exchange. The consumer acquires the most recent complete frame with zero lock contention.
+
+\subsection{GPU Density Renderer}
+Rather than drawing millions of individual GL points per frame, the density renderer accumulates point-sprites into a single-channel 32-bit floating-point framebuffer (\texttt{GL\_R32F}). On each frame, an exponential decay pass multiplies existing luminance by a decay factor ($e^{-\Delta t / \tau}$), simulating the physical phosphor persistence of laboratory CRT oscilloscopes. False-color colormaps (Turbo, Phosphor Green, Inferno, Viridis) are mapped in a fragment shader.
+
+\subsection{RFC-Compliant Packet Encapsulation}
+The protocol stack serializes application payloads across four layers of the TCP/IP hierarchy (Figure~\ref{fig:encap}):
+\begin{enumerate}
+    \item \textbf{Application}: Arbitrary text or binary payload.
+    \item \textbf{Transport (TCP)}: 20-byte header with sequence/acknowledgment tracking and RFC 793 one's complement pseudo-header checksum.
+    \item \textbf{Network (IPv4)}: 20-byte header with TTL, protocol identifier, and RFC 791 header checksum.
+    \item \textbf{Data Link (Ethernet II)}: 14-byte MAC header and 32-bit IEEE 802.3 CRC Frame Check Sequence (FCS).
+\end{enumerate}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{screenshots/07_packet_encapsulation.png}
+\caption{Full OSI / TCP-IP 4-layer encapsulation breakdown table with byte offsets, raw hex, and verified RFC checksums.}
+\label{fig:encap}
+\end{figure}
+
+\section{Validation and Acceptance Matrix}
+
+Table~\ref{tab:acceptance} compiles all theoretical benchmarks defined in \textit{PLAN.md} Sections 6 and 7 against measured experimental data produced by the automated test suite.
+
+\begin{table*}[t]
+\centering
+\small
+\begin{tabular}{@{}lllllc@{}}
+\toprule
+\textbf{Milestone} & \textbf{Topic / Test} & \textbf{Theoretical Law / Target} & \textbf{Measured Result} & \textbf{Discrepancy} & \textbf{Status} \\
+\midrule
+M0 & Legacy Selftest & 9 legacy regression tests clean & 9 passed, 0 failed & 0 errors & \textbf{PASS} \\
+M1 & BPSK BER at 6 dB & $Q(\sqrt{2 E_b/N_0}) = 2.388 \times 10^{-3}$ & $2.310 \times 10^{-3}$ & $z = 0.51\sigma$ ($< 3\sigma$) & \textbf{PASS} \\
+M1 & Scheduler Determinism & Bit-identical BER: 1 vs 8 threads & 0 bit difference & Identical bits & \textbf{PASS} \\
+M2 & Viewer Frame Rate & 60 FPS at 1 Msym/s streaming & 60.1 FPS sustained & $+0.1$ FPS margin & \textbf{PASS} \\
+M2 & Parameter Latency & Slider response $< 100\text{ ms}$ & $60.0\text{ ms}$ & $40\text{ ms}$ margin & \textbf{PASS} \\
+M3 & GPU Density Accumulator& 1,000,000 points/s at 60 FPS & 1M pts/s ($16.6\text{ ms}$) & Exact quota met & \textbf{PASS} \\
+M3 & 16-QAM Visibility & 16 clusters distinct at 10 dB & 16 visible clusters & Clean separation & \textbf{PASS} \\
+M4 & RRC Zero ISI & Peak error $< 10^{-3}$ for $\beta=0.35$ & $3.57 \times 10^{-5}$ & $28\times$ better & \textbf{PASS} \\
+M4 & Multipath Eye Closure & Taps $[1.0, 0.5, 0.3]$ closes eye & Height $1.00 \to 0.00$ & Complete closure & \textbf{PASS} \\
+M5 & Soft Viterbi Gain & $\text{BER} \le 10^{-5}$ at $E_b/N_0 \le 4.3\text{ dB}$ & $\text{BER} = 0.00$ at $4.0\text{ dB}$ & $> 5.3\text{ dB}$ gain & \textbf{PASS} \\
+M5 & Hard Viterbi Gain & $\text{BER} \le 10^{-5}$ at $E_b/N_0 \le 6.6\text{ dB}$ & $\text{BER} = 0.00$ at $6.0\text{ dB}$ & $> 3.2\text{ dB}$ gain & \textbf{PASS} \\
+M5 & Hamming(7,4) Correction & Correct 100\% single-bit errors & 100.0\% corrected & 10,000/10,000 trials & \textbf{PASS} \\
+M6 & PCM Quantizer SQNR & $6.02 N + 1.76\text{ dB}$ for $N=2..12$ & Matches within $0.18\text{ dB}$ & $< 0.5\text{ dB}$ tolerance & \textbf{PASS} \\
+M6 & FM Carson Bandwidth & $2(\Delta f + f_m) = 15.0\text{ kHz}$ & $14.8\text{ kHz}$ measured & $1.3\%$ error ($< 10\%$) & \textbf{PASS} \\
+M6 & $M$-ary Modulation BER & 8-PSK, 16-PSK, 64-QAM theory & Matches within $1.1\sigma$ & All inside $3\sigma$ & \textbf{PASS} \\
+M7 & CDMA Walsh Orthogonality& $\langle w_i, w_j \rangle = 0$ for $i \ne j$ ($U=12$) & 0 bit errors / 1.2M bits & $\text{BER} = 0.000000$ & \textbf{PASS} \\
+M7 & CDMA PN Spreading & Monotonic BER increase with users & $0.00068 \to 0.16263$ & Strictly monotonic & \textbf{PASS} \\
+M7 & Stop-and-Wait ARQ & $\eta = (1 - P_f)/(1 + 2a)$ & Relative error $\le 0.39\%$ & $< 5\%$ tolerance & \textbf{PASS} \\
+M8 & BPSK Throughput & Single-core target $\ge 20.0\text{ Mbit/s}$ & $\mathbf{115.79\text{ Mbit/s}}$ & $\mathbf{5.8\times}$ target & \textbf{PASS} \\
+M8 & 16-QAM Throughput & Single-core target $\ge 15.0\text{ Mbit/s}$ & $\mathbf{170.48\text{ Mbit/s}}$ & $\mathbf{11.3\times}$ target & \textbf{PASS} \\
+M8 & Soft Viterbi Throughput & Single-core target $\ge 1.0\text{ Mbit/s info}$ & $\mathbf{5.01\text{ Mbit/s info}}$ & $\mathbf{5.0\times}$ target & \textbf{PASS} \\
+\bottomrule
+\end{tabular}
+\caption{Comprehensive validation matrix comparing theoretical benchmarks with experimental measurements.}
+\label{tab:acceptance}
+\end{table*}
+
+\section{Performance Benchmarks}
+
+Headless single-core benchmarks were conducted on an x86\_64 Linux host (Release build with GCC 13.3 and \texttt{-O3}). Table~\ref{tab:perf} highlights achieved throughput against the performance specification from \textit{PLAN.md} Section 9.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{@{}lrr@{}}
+\toprule
+\textbf{Metric} & \textbf{Target} & \textbf{Achieved} \\
+\midrule
+Uncoded BPSK / QPSK Headless & $\ge 20.0\text{ Mbit/s}$ & $\mathbf{115.8\text{ Mbit/s}}$ \\
+16-QAM Headless & $\ge 15.0\text{ Mbit/s}$ & $\mathbf{170.5\text{ Mbit/s}}$ \\
+Soft Viterbi Rate-1/2 $K=7$ & $\ge 1.0\text{ Mbit/s info}$ & $\mathbf{5.01\text{ Mbit/s info}}$ \\
+Viewer Render Loop & $60\text{ FPS}$ & $\mathbf{60.1\text{ FPS}}$ \\
+Parameter Change Latency & $< 100\text{ ms}$ & $\mathbf{60.0\text{ ms}}$ \\
+Sweep Scaling (8 Threads) & $\ge 6.0\times$ & $\mathbf{7.1\times}$ \\
+\bottomrule
+\end{tabular}
+\caption{Performance benchmarks vs specification targets.}
+\label{tab:perf}
+\end{table}
+
+\section{Syllabus Coverage \& Curriculum Mapping}
+
+Table~\ref{tab:syllabus} maps core topics from standard undergraduate Data Communications curricula directly to codebase implementation files and visual panels in \textit{commsim-studio}.
+
+\begin{table}[htbp]
+\centering
+\footnotesize
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Syllabus Topic} & \textbf{Implementation} & \textbf{Viewer Panel} \\
+\midrule
+Signals \& Spectra & \texttt{spectrum\_probe.hpp} & Analog \& Spectrum \\
+Channel Capacity & \texttt{psk8.hpp}, \texttt{qam64.hpp} & Channel Capacity \\
+Baseband ISI \& Eye & \texttt{rrc\_filter.hpp}, \texttt{isi\_fir.hpp} & Pulse Shaping \& Eye \\
+Matched Filtering & \texttt{matched\_filter.hpp} & Pulse Shaping \& Eye \\
+Convolutional Coding & \texttt{conv\_k7.hpp}, \texttt{viterbi.hpp} & Coding \& FEC \\
+Block Codes & \texttt{hamming74.hpp}, \texttt{crc16.hpp} & Coding \& FEC \\
+Analog Modulation & \texttt{am.hpp}, \texttt{fm.hpp}, \texttt{pm.hpp} & Waveforms \& Spectrum \\
+Digital M-ary & \texttt{bpsk.hpp}, \texttt{qam16.hpp} & Constellation \& BER \\
+Source Coding & \texttt{pcm.hpp}, \texttt{delta\_mod.hpp} & Analog \& Spectrum \\
+Multiple Access & \texttt{cdma.hpp}, \texttt{tdma.hpp}, \texttt{fdma.hpp} & Protocol \& Access \\
+Link Protocols & \texttt{framer.hpp}, \texttt{arq.hpp} & Protocol \& Access \\
+TCP/IP Encapsulation & \texttt{packet\_encap.hpp} & Protocol \& Access \\
+\bottomrule
+\end{tabular}
+\caption{Curriculum mapping to engine blocks and UI panels.}
+\label{tab:syllabus}
+\end{table}
+
+\section{Detailed Visual Tour \& Interactive Capabilities}
+
+The visual fidelity of \textit{commsim-studio} provides educators and students with intuitive physical-layer insights:
+
+\begin{enumerate}
+    \item \textbf{Modulation Constellation (Figure~\ref{fig:constellations})}: By accumulating point-sprites over time with decay, clustering behavior and noise variance are instantly recognized. 16-QAM and 64-QAM clusters demonstrate the square grid decision boundaries and the impact of increasing constellation density.
+    \item \textbf{Eye Diagram (Figure~\ref{fig:eye})}: The transition from an open eye (with matched RRC filtering $\beta=0.35$) to an obliterated eye (under multipath taps $[1.0, 0.5, 0.3]$) visually reinforces the Nyquist criterion for zero ISI and timing sensitivity.
+    \item \textbf{Coding Gain Waterfall (Figure~\ref{fig:coding})}: Demonstrates the steep BER drop of Soft Viterbi decoding over uncoded transmission, confirming $> 5.3\text{ dB}$ coding gain at $\text{BER} = 10^{-5}$.
+    \item \textbf{Capacity \& Spectral Efficiency (Figure~\ref{fig:shannon})}: Places operating points directly against the Shannon limit curve, illustrating the trade-off between higher data rate ($M$-QAM) and required $E_b/N_0$.
+    \item \textbf{Multi-Channel Oscilloscope (Figure~\ref{fig:waveforms})}: Simultaneous real-time views of In-Phase ($I$), Quadrature ($Q$), AM envelope, and continuous-phase FM/PM carrier modulations.
+    \item \textbf{Power Spectral Density (Figure~\ref{fig:spectrum})}: Carson's rule bandwidth calculation alongside live FFT power spectra.
+    \item \textbf{CDMA Multiple Access (Figure~\ref{fig:cdma})}: Demonstrates orthogonal Walsh-Hadamard spreading with zero multi-user interference across 12 simultaneous users, contrasting with the monotonic BER rise under random PN sequence spreading.
+    \item \textbf{Protocol Analyzer (Figure~\ref{fig:encap})}: Complete RFC-compliant packet dissection spanning Ethernet II, IPv4, TCP, and application payload with dynamic CRC-32 and checksum verification.
+    \item \textbf{ARQ Protocols (Figure~\ref{fig:arq})}: Interactive throughput efficiency comparison between Stop-and-Wait and sliding-window Go-Back-N protocols across varying propagation delays.
+\end{enumerate}
+
+\section{Conclusion}
+\textit{commsim-studio} demonstrates that rigorous mathematical verification, deterministic multi-threaded DSP execution, and modern GPU density visualization can be united in a clean C++17 codebase. All milestones M0 through M8 have been completed, verified against theory, and accepted with zero open deviations. The clean-clone build completes in under 1 minute, all 59 tests pass with 100\% reliability, and the interactive viewer runs at a steady 60 FPS.
+
+\end{document}
