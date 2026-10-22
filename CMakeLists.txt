@@ -90,6 +90,11 @@ target_include_directories(commsim_legacy INTERFACE
 target_link_libraries(commsim_legacy INTERFACE Threads::Threads)
 
 # --------------------------------------------------------------------------
+# Engine (M1): Block, Stream, Graph, Scheduler, RNG, ParamStore, Probe
+# --------------------------------------------------------------------------
+add_subdirectory(engine)
+
+# --------------------------------------------------------------------------
 # Tests
 # --------------------------------------------------------------------------
 enable_testing()
