@@ -63,6 +63,11 @@ public:
         return s;
     }
 
+    void reset() {
+        errors_.store(0, std::memory_order_relaxed);
+        total_.store(0, std::memory_order_relaxed);
+    }
+
     double ber() const {
         uint64_t t = total_.load(std::memory_order_relaxed);
         if (t == 0) return 0.0;

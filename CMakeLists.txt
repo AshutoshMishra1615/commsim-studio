@@ -69,6 +69,28 @@ target_include_directories(imgui_lib PUBLIC
 target_link_libraries(imgui_lib PUBLIC SDL2::SDL2-static OpenGL::GL)
 
 # --------------------------------------------------------------------------
+# ImPlot (pinned release v0.17)
+# --------------------------------------------------------------------------
+FetchContent_Declare(
+    implot
+    GIT_REPOSITORY https://github.com/epezent/implot.git
+    GIT_TAG        v0.17
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(implot)
+
+add_library(implot_lib STATIC
+    ${implot_SOURCE_DIR}/implot.cpp
+    ${implot_SOURCE_DIR}/implot_items.cpp
+    ${implot_SOURCE_DIR}/implot_demo.cpp
+)
+target_include_directories(implot_lib PUBLIC
+    ${implot_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}
+)
+target_link_libraries(implot_lib PUBLIC imgui_lib)
+
+# --------------------------------------------------------------------------
 # Catch2 v3 (pinned)
 # --------------------------------------------------------------------------
 FetchContent_Declare(

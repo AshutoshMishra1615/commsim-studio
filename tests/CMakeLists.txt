@@ -31,3 +31,18 @@ target_compile_options(test_engine PRIVATE
 )
 catch_discover_tests(test_engine)
 
+# ---- M2: viewer sim thread, triple buffer, latency, 60 FPS ----
+add_executable(test_viewer test_viewer.cpp)
+target_link_libraries(test_viewer
+    PRIVATE
+        engine
+        Catch2::Catch2WithMain
+        Threads::Threads
+)
+target_include_directories(test_viewer PRIVATE
+    ${CMAKE_SOURCE_DIR}
+)
+target_compile_options(test_viewer PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra>
+)
+catch_discover_tests(test_viewer)
