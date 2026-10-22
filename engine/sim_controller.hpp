@@ -32,11 +32,15 @@
 #include "../blocks/mapping/bfsk.hpp"
 #include "../blocks/mapping/bpsk.hpp"
 #include "../blocks/mapping/ook.hpp"
+#include "../blocks/mapping/psk8.hpp"
+#include "../blocks/mapping/psk16.hpp"
 #include "../blocks/mapping/qam16.hpp"
+#include "../blocks/mapping/qam64.hpp"
 #include "../blocks/mapping/qpsk.hpp"
 #include "../blocks/probe/waveform_probe.hpp"
 #include "../blocks/probe/constellation_probe.hpp"
 #include "../blocks/probe/eye_probe.hpp"
+#include "../blocks/probe/spectrum_probe.hpp"
 #include "../blocks/shaping/rrc_filter.hpp"
 #include "../blocks/shaping/matched_filter.hpp"
 #include "../blocks/shaping/upsample.hpp"
@@ -49,7 +53,10 @@ namespace engine {
 enum class Scheme {
     BPSK,
     QPSK,
+    PSK8,
     QAM16,
+    PSK16,
+    QAM64,
     BFSK,
     OOK
 };
@@ -58,7 +65,10 @@ inline const char* schemeToString(Scheme s) {
     switch (s) {
         case Scheme::BPSK:  return "BPSK";
         case Scheme::QPSK:  return "QPSK";
+        case Scheme::PSK8:  return "8-PSK";
         case Scheme::QAM16: return "16-QAM";
+        case Scheme::PSK16: return "16-PSK";
+        case Scheme::QAM64: return "64-QAM";
         case Scheme::BFSK:  return "BFSK";
         case Scheme::OOK:   return "OOK";
     }
@@ -67,7 +77,10 @@ inline const char* schemeToString(Scheme s) {
 
 inline Scheme stringToScheme(const std::string& str) {
     if (str == "QPSK") return Scheme::QPSK;
+    if (str == "8-PSK" || str == "PSK8") return Scheme::PSK8;
     if (str == "16-QAM" || str == "QAM16") return Scheme::QAM16;
+    if (str == "16-PSK" || str == "PSK16") return Scheme::PSK16;
+    if (str == "64-QAM" || str == "QAM64") return Scheme::QAM64;
     if (str == "BFSK") return Scheme::BFSK;
     if (str == "OOK") return Scheme::OOK;
     return Scheme::BPSK;
@@ -222,6 +235,11 @@ public:
         return eye_buffer_;
     }
 
+    blocks::SpectrumProbe::Snapshot getSpectrumSnapshot() const {
+        if (spectrum_probe_) return spectrum_probe_->snapshot();
+        return {};
+    }
+
     /// Run N chunks synchronously
     void runSynchronous(size_t chunks) {
         processCommands();
@@ -305,7 +323,10 @@ private:
         switch (scheme) {
             case Scheme::BPSK:  bits_per_sym = 1; break;
             case Scheme::QPSK:  bits_per_sym = 2; break;
+            case Scheme::PSK8:  bits_per_sym = 3; break;
             case Scheme::QAM16: bits_per_sym = 4; break;
+            case Scheme::PSK16: bits_per_sym = 4; break;
+            case Scheme::QAM64: bits_per_sym = 6; break;
             case Scheme::BFSK:  bits_per_sym = 1; break;
             case Scheme::OOK:   bits_per_sym = 1; break;
         }
@@ -337,9 +358,21 @@ private:
                     mod_id   = g->add(std::make_unique<blocks::QpskMod>());
                     demod_id = g->add(std::make_unique<blocks::QpskDemod>());
                     break;
+                case Scheme::PSK8:
+                    mod_id   = g->add(std::make_unique<blocks::Psk8Mod>());
+                    demod_id = g->add(std::make_unique<blocks::Psk8Demod>());
+                    break;
                 case Scheme::QAM16:
                     mod_id   = g->add(std::make_unique<blocks::Qam16Mod>());
                     demod_id = g->add(std::make_unique<blocks::Qam16Demod>());
+                    break;
+                case Scheme::PSK16:
+                    mod_id   = g->add(std::make_unique<blocks::Psk16Mod>());
+                    demod_id = g->add(std::make_unique<blocks::Psk16Demod>());
+                    break;
+                case Scheme::QAM64:
+                    mod_id   = g->add(std::make_unique<blocks::Qam64Mod>());
+                    demod_id = g->add(std::make_unique<blocks::Qam64Demod>());
                     break;
                 case Scheme::BFSK:
                     mod_id   = g->add(std::make_unique<blocks::BfskMod>());
@@ -364,6 +397,10 @@ private:
             waveform_probe_ = wf_block.get();
             auto wf_id     = g->add(std::move(wf_block));
 
+            auto spec_block = std::make_unique<blocks::SpectrumProbe>(1024, 8.0 * 1e6);
+            spectrum_probe_ = spec_block.get();
+            auto spec_id    = g->add(std::move(spec_block));
+
             auto rx_mf_id  = g->add(std::make_unique<blocks::MatchedFilter>(sps, span, beta));
 
             auto eye_block = std::make_unique<blocks::EyeProbe>(eye_buffer_, 4096, static_cast<float>(sps));
@@ -385,7 +422,7 @@ private:
             auto probe_id = g->add(std::move(ber_block));
 
             // Connect graph:
-            // prbs -> fork -> mod -> upsample -> tx_rrc -> isi -> awgn -> wf -> rx_mf -> eye -> downsample -> constel -> demod -> probe
+            // prbs -> fork -> mod -> upsample -> tx_rrc -> isi -> awgn -> wf -> spec, rx_mf -> eye -> downsample -> constel -> demod -> probe
             g->connect(prbs_id, 0, fork_id, 0);
             g->connect(fork_id, 0, mod_id, 0);
             g->connect(fork_id, 1, probe_id, 0);    // TX reference bits
@@ -394,6 +431,7 @@ private:
             g->connect(tx_rrc_id, 0, isi_id, 0);
             g->connect(isi_id, 0, awgn_id, 0);
             g->connect(awgn_id, 0, wf_id, 0);       // Continuous waveform probe
+            g->connect(wf_id, 0, spec_id, 0);       // Spectrum probe
             g->connect(wf_id, 0, rx_mf_id, 0);
             g->connect(rx_mf_id, 0, eye_id, 0);     // Eye probe after matched filter
             g->connect(eye_id, 0, down_id, 0);      // Downsample at decision instant
@@ -424,9 +462,21 @@ private:
                     mod_id   = g->add(std::make_unique<blocks::QpskMod>());
                     demod_id = g->add(std::make_unique<blocks::QpskDemod>());
                     break;
+                case Scheme::PSK8:
+                    mod_id   = g->add(std::make_unique<blocks::Psk8Mod>());
+                    demod_id = g->add(std::make_unique<blocks::Psk8Demod>());
+                    break;
                 case Scheme::QAM16:
                     mod_id   = g->add(std::make_unique<blocks::Qam16Mod>());
                     demod_id = g->add(std::make_unique<blocks::Qam16Demod>());
+                    break;
+                case Scheme::PSK16:
+                    mod_id   = g->add(std::make_unique<blocks::Psk16Mod>());
+                    demod_id = g->add(std::make_unique<blocks::Psk16Demod>());
+                    break;
+                case Scheme::QAM64:
+                    mod_id   = g->add(std::make_unique<blocks::Qam64Mod>());
+                    demod_id = g->add(std::make_unique<blocks::Qam64Demod>());
                     break;
                 case Scheme::BFSK:
                     mod_id   = g->add(std::make_unique<blocks::BfskMod>());
@@ -449,6 +499,10 @@ private:
             waveform_probe_ = wf_block.get();
             auto wf_id = g->add(std::move(wf_block));
 
+            auto spec_block = std::make_unique<blocks::SpectrumProbe>(1024, 1.0 * 1e6);
+            spectrum_probe_ = spec_block.get();
+            auto spec_id    = g->add(std::move(spec_block));
+
             auto constel_block = std::make_unique<blocks::ConstellationProbe>(constellation_buffer_);
             constellation_probe_ = constel_block.get();
             auto constel_id = g->add(std::move(constel_block));
@@ -470,6 +524,7 @@ private:
             g->connect(mod_id, 0, isi_id, 0);
             g->connect(isi_id, 0, awgn_id, 0);
             g->connect(awgn_id, 0, wf_id, 0);       // Tap noisy symbols to waveform probe
+            g->connect(wf_id, 0, spec_id, 0);      // Tap to spectrum probe
             g->connect(wf_id, 0, constel_id, 0);   // Tap to constellation probe
             g->connect(constel_id, 0, eye_id, 0);  // Tap to eye probe
             g->connect(eye_id, 0, demod_id, 0);
@@ -539,6 +594,7 @@ private:
     blocks::EyeProbe* eye_probe_ = nullptr;
     blocks::IsiFir* isi_channel_ = nullptr;
     blocks::Downsample* downsample_ = nullptr;
+    blocks::SpectrumProbe* spectrum_probe_ = nullptr;
     std::shared_ptr<TripleBuffer<blocks::WaveformSnapshot>> waveform_buffer_;
     std::shared_ptr<TripleBuffer<blocks::ConstellationSnapshot>> constellation_buffer_;
     std::shared_ptr<TripleBuffer<blocks::EyeSnapshot>> eye_buffer_;

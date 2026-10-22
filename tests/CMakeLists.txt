@@ -97,4 +97,21 @@ target_compile_options(test_coding PRIVATE
 )
 catch_discover_tests(test_coding)
 
+# ---- M6: source coding, analog (AM/FM/PM), M-ary (8-PSK, 16-PSK, 64-QAM), capacity ----
+add_executable(test_m6 test_m6.cpp)
+target_link_libraries(test_m6
+    PRIVATE
+        engine
+        Catch2::Catch2WithMain
+        Threads::Threads
+)
+target_include_directories(test_m6 PRIVATE
+    ${CMAKE_SOURCE_DIR}
+)
+target_compile_options(test_m6 PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra>
+)
+catch_discover_tests(test_m6)
+
+
 

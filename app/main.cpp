@@ -37,6 +37,14 @@
 #include "render/density_renderer.hpp"
 #include "blocks/coding/crc16.hpp"
 #include "blocks/coding/hamming74.hpp"
+#include "blocks/mapping/psk8.hpp"
+#include "blocks/mapping/psk16.hpp"
+#include "blocks/mapping/qam64.hpp"
+#include "blocks/source_coding/pcm.hpp"
+#include "blocks/source_coding/delta_mod.hpp"
+#include "blocks/analog/am.hpp"
+#include "blocks/analog/fm.hpp"
+#include "blocks/analog/pm.hpp"
 
 // ============================================================
 // Constants & Helpers
@@ -57,8 +65,14 @@ static double theoreticalBer(engine::Scheme scheme, double ebn0_db) {
         case engine::Scheme::BPSK:
         case engine::Scheme::QPSK:
             return qFunction(std::sqrt(2.0 * ebn0_lin));
+        case engine::Scheme::PSK8:
+            return blocks::Psk8Mod::theoryBer(ebn0_lin);
         case engine::Scheme::QAM16:
             return (3.0 / 8.0) * std::erfc(std::sqrt(0.4 * ebn0_lin));
+        case engine::Scheme::PSK16:
+            return blocks::Psk16Mod::theoryBer(ebn0_lin);
+        case engine::Scheme::QAM64:
+            return blocks::Qam64Mod::theoryBer(ebn0_lin);
         case engine::Scheme::BFSK:
         case engine::Scheme::OOK:
             return qFunction(std::sqrt(ebn0_lin));
@@ -147,14 +161,15 @@ int main(int /*argc*/, char** /*argv*/)
     // Local UI state
     float ui_ebn0 = 10.0f;
     int current_scheme_idx = 0;
-    const char* scheme_names[] = { "BPSK", "QPSK", "16-QAM", "BFSK", "OOK" };
+    const char* scheme_names[] = { "BPSK", "QPSK", "8-PSK", "16-QAM", "16-PSK", "64-QAM", "BFSK", "OOK" };
     const engine::Scheme scheme_enums[] = {
-        engine::Scheme::BPSK, engine::Scheme::QPSK, engine::Scheme::QAM16,
+        engine::Scheme::BPSK, engine::Scheme::QPSK, engine::Scheme::PSK8,
+        engine::Scheme::QAM16, engine::Scheme::PSK16, engine::Scheme::QAM64,
         engine::Scheme::BFSK, engine::Scheme::OOK
     };
 
-    // Precalculate theory curves (0 to 14 dB)
-    constexpr int kTheoryPoints = 71;
+    // Precalculate theory curves (0 to 20 dB)
+    constexpr int kTheoryPoints = 101;
     std::vector<double> curve_snr(kTheoryPoints);
     std::vector<double> curve_ber(kTheoryPoints);
     for (int i = 0; i < kTheoryPoints; ++i) {
@@ -550,6 +565,128 @@ int main(int /*argc*/, char** /*argv*/)
         }
         ImGui::SameLine();
         ImGui::Text("%s", hamming_status.c_str());
+
+        ImGui::End();
+
+        // ----------------------------------------------------
+        // Panel 7: Channel Capacity & Shannon Bound (M6)
+        // ----------------------------------------------------
+        ImGui::Begin("Channel Capacity & Shannon Bound (M6)");
+        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Spectral Efficiency vs Eb/N0 & Modulation Operating Points");
+
+        // Precompute Shannon capacity curve: eta in [0.05, 8.0]
+        constexpr int kShannonPts = 80;
+        static double shannon_ebn0[kShannonPts];
+        static double shannon_eta[kShannonPts];
+        static bool shannon_init = false;
+        if (!shannon_init) {
+            for (int i = 0; i < kShannonPts; ++i) {
+                const double eta = 0.1 + static_cast<double>(i) * 0.1;
+                shannon_eta[i] = eta;
+                const double lin = (std::pow(2.0, eta) - 1.0) / eta;
+                shannon_ebn0[i] = 10.0 * std::log10(lin);
+            }
+            shannon_init = true;
+        }
+
+        // Scheme operating points at BER = 1e-5: (Eb/N0 dB, eta bits/s/Hz)
+        static const double op_ebn0[] = { 9.6,  9.6,  13.0, 13.4,  17.5, 17.8,  4.3 };
+        static const double op_eta[]  = { 1.0,  2.0,   3.0,  4.0,   4.0,  6.0,  0.5 };
+        static const char* op_labels[] = { "BPSK", "QPSK", "8-PSK", "16-QAM", "16-PSK", "64-QAM", "Conv K=7 Soft" };
+        constexpr int kNumOps = IM_ARRAYSIZE(op_ebn0);
+
+        if (ImPlot::BeginPlot("Spectral Efficiency vs Eb/N0", ImVec2(-1, 260))) {
+            ImPlot::SetupAxes("Eb/N0 (dB)", "Spectral Efficiency eta (bits/s/Hz)");
+            ImPlot::SetupAxisLimits(ImAxis_X1, -2.0, 20.0, ImPlotCond_Always);
+            ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0, 7.0, ImPlotCond_Always);
+
+            // Continuous Shannon Limit
+            ImPlot::SetNextLineStyle(ImVec4(0.2f, 0.9f, 0.3f, 1.0f), 2.5f);
+            ImPlot::PlotLine("Shannon Limit C/W", shannon_ebn0, shannon_eta, kShannonPts);
+
+            // Plot operating points
+            for (int i = 0; i < kNumOps; ++i) {
+                ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 5.0f, ImVec4(1.0f, 0.4f, 0.2f, 1.0f), 2.0f);
+                ImPlot::PlotScatter(op_labels[i], &op_ebn0[i], &op_eta[i], 1);
+            }
+
+            ImPlot::EndPlot();
+        }
+
+        ImGui::Separator();
+        ImGui::Text("Shannon Gap Analysis (at BER = 10^-5):");
+        if (ImGui::BeginTable("ShannonTable", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+            ImGui::TableSetupColumn("Scheme");
+            ImGui::TableSetupColumn("eta (bits/s/Hz)");
+            ImGui::TableSetupColumn("Operating Eb/N0");
+            ImGui::TableSetupColumn("Shannon Limit");
+            ImGui::TableSetupColumn("Gap to Capacity");
+            ImGui::TableHeadersRow();
+
+            for (int i = 0; i < kNumOps; ++i) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::Text("%s", op_labels[i]);
+                ImGui::TableSetColumnIndex(1);
+                ImGui::Text("%.1f", op_eta[i]);
+                ImGui::TableSetColumnIndex(2);
+                ImGui::Text("%.1f dB", op_ebn0[i]);
+
+                const double limit_lin = (std::pow(2.0, op_eta[i]) - 1.0) / op_eta[i];
+                const double limit_db = 10.0 * std::log10(limit_lin);
+                const double gap_db = op_ebn0[i] - limit_db;
+
+                ImGui::TableSetColumnIndex(3);
+                ImGui::Text("%.2f dB", limit_db);
+                ImGui::TableSetColumnIndex(4);
+                ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "%.2f dB", gap_db);
+            }
+            ImGui::EndTable();
+        }
+        ImGui::End();
+
+        // ----------------------------------------------------
+        // Panel 8: Analog & Spectrum Analyzer (M6)
+        // ----------------------------------------------------
+        ImGui::Begin("Analog & Spectrum Analyzer (M6)");
+        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Live Power Spectral Density (PSD) & Carson's Rule");
+
+        const auto spec_snap = sim.getSpectrumSnapshot();
+        if (!spec_snap.freqs.empty() && !spec_snap.psd_db.empty()) {
+            if (ImPlot::BeginPlot("RF / Baseband Power Spectrum", ImVec2(-1, 240))) {
+                ImPlot::SetupAxes("Frequency (kHz)", "PSD (dB/Hz)");
+                ImPlot::SetupAxisLimits(ImAxis_Y1, -90.0, 10.0, ImPlotCond_Always);
+
+                // Convert Hz to kHz for display
+                std::vector<float> freqs_khz(spec_snap.freqs.size());
+                for (size_t i = 0; i < freqs_khz.size(); ++i) {
+                    freqs_khz[i] = spec_snap.freqs[i] * 0.001f;
+                }
+
+                ImPlot::SetNextLineStyle(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), 1.5f);
+                ImPlot::PlotLine("PSD (dB)", freqs_khz.data(), spec_snap.psd_db.data(), static_cast<int>(freqs_khz.size()));
+                ImPlot::EndPlot();
+            }
+        } else {
+            ImGui::TextDisabled("Awaiting spectrum analyzer data...");
+        }
+
+        ImGui::Separator();
+        ImGui::Text("FM Carson's Rule Calculator:");
+        static float fm_fm = 250.0f;
+        static float fm_delta = 1000.0f;
+        ImGui::SliderFloat("Modulation Freq fm (Hz)", &fm_fm, 50.0f, 2000.0f, "%.0f Hz");
+        ImGui::SliderFloat("Peak Deviation Delta_f (Hz)", &fm_delta, 100.0f, 5000.0f, "%.0f Hz");
+        const float beta = (fm_fm > 1e-3f) ? (fm_delta / fm_fm) : 0.0f;
+        const float carson_bw = 2.0f * (fm_delta + fm_fm);
+        ImGui::Text("Modulation Index Beta: %.2f | Carson Bandwidth: %.1f Hz", beta, carson_bw);
+
+        ImGui::Separator();
+        ImGui::Text("PCM Quantizer SQNR Formula (PLAN.md §6):");
+        static int pcm_n_bits = 8;
+        ImGui::SliderInt("Quantizer Bits N", &pcm_n_bits, 2, 12);
+        const double pcm_sqnr = 6.0206 * pcm_n_bits + 1.7609;
+        ImGui::Text("Theoretical SQNR (6.02*N + 1.76): %.2f dB", pcm_sqnr);
 
         ImGui::End();
 
