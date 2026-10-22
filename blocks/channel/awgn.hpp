@@ -35,8 +35,9 @@ public:
               std::vector<engine::Stream<engine::cf>*>& out,
               size_t n) override {
         if (in.empty() || !in[0] || out.empty() || !out[0]) return;
+        const size_t in_n = in[0]->buf.empty() ? n : in[0]->buf.size();
 
-        out[0]->resize(n);
+        out[0]->resize(in_n);
 
         // Read noise parameters
         const double ebn0_db      = params ? params->get("ebn0_db",      6.0) : 6.0;
@@ -54,10 +55,10 @@ public:
 
         const auto& s = in[0]->buf;
         auto& r = out[0]->buf;
-        for (size_t i = 0; i < n; i += 2) {
+        for (size_t i = 0; i < in_n; i += 2) {
             auto [z0, z1] = rng_.next_normal2();
             r[i] = s[i] + engine::cf(z0 * sigma, z1 * sigma);
-            if (i + 1 < n) {
+            if (i + 1 < in_n) {
                 auto [z2, z3] = rng_.next_normal2();
                 r[i+1] = s[i+1] + engine::cf(z2 * sigma, z3 * sigma);
             }

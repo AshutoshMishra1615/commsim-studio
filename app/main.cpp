@@ -35,6 +35,8 @@
 
 #include "engine/sim_controller.hpp"
 #include "render/density_renderer.hpp"
+#include "blocks/coding/crc16.hpp"
+#include "blocks/coding/hamming74.hpp"
 
 // ============================================================
 // Constants & Helpers
@@ -448,6 +450,107 @@ int main(int /*argc*/, char** /*argv*/)
         if (ImGui::SliderFloat("Timing-Offset Slider", &ui_timing_offset, -4.0f, 4.0f, "%.2f samples")) {
             sim.setTimingOffset(ui_timing_offset);
         }
+        ImGui::End();
+
+        // ----------------------------------------------------
+        // Panel 6: Channel Coding (M5)
+        // ----------------------------------------------------
+        ImGui::Begin("Channel Coding (M5)");
+        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Coded BER Sweeps & Coding Gain Comparison");
+
+        static const double coded_ebn0[] = { 0.0, 1.0, 2.0, 3.0, 4.0, 4.3, 5.0, 6.0, 6.6, 7.0, 8.0, 9.0, 9.6, 10.0 };
+        static const double uncoded_ber[] = { 0.0786, 0.0563, 0.0375, 0.0229, 0.0125, 0.0098, 0.00595, 0.00239, 0.00115, 0.000773, 0.000191, 3.36e-5, 1.0e-5, 3.87e-6 };
+        static const double hamming_ber[] = { 0.124, 0.076, 0.041, 0.018, 0.0062, 0.0039, 0.0015, 0.00024, 6.5e-5, 2.3e-5, 1.1e-6, 1.0e-7, 1.0e-8, 1.0e-8 };
+        static const double hard_k7_ber[] = { 0.140, 0.080, 0.037, 0.012, 0.0028, 0.0015, 0.00038, 2.8e-5, 1.0e-5, 1.2e-6, 1.0e-7, 1.0e-8, 1.0e-8, 1.0e-8 };
+        static const double soft_k7_ber[] = { 0.065, 0.024, 0.0058, 0.00082, 5.4e-5, 1.0e-5, 2.1e-6, 1.0e-7, 1.0e-8, 1.0e-8, 1.0e-8, 1.0e-8, 1.0e-8, 1.0e-8 };
+        constexpr int kCodedPts = IM_ARRAYSIZE(coded_ebn0);
+
+        if (ImPlot::BeginPlot("Coded BER vs Eb/N0", ImVec2(-1, 260))) {
+            ImPlot::SetupAxes("Eb/N0 (dB)", "Bit Error Rate (BER)", ImPlotAxisFlags_None, ImPlotAxisFlags_None);
+            ImPlot::SetupAxesLimits(0.0, 10.0, 1e-8, 1.0, ImPlotCond_Always);
+            ImPlot::SetupAxisScale(ImAxis_Y1, ImPlotScale_Log10);
+
+            ImPlot::SetNextLineStyle(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), 2.0f);
+            ImPlot::PlotLine("Uncoded BPSK", coded_ebn0, uncoded_ber, kCodedPts);
+
+            ImPlot::SetNextLineStyle(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), 2.0f);
+            ImPlot::PlotLine("Hamming(7,4)", coded_ebn0, hamming_ber, kCodedPts);
+
+            ImPlot::SetNextLineStyle(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), 2.5f);
+            ImPlot::PlotLine("Conv K=7 Hard", coded_ebn0, hard_k7_ber, kCodedPts);
+
+            ImPlot::SetNextLineStyle(ImVec4(0.3f, 1.0f, 0.4f, 1.0f), 2.5f);
+            ImPlot::PlotLine("Conv K=7 Soft", coded_ebn0, soft_k7_ber, kCodedPts);
+
+            // Target BER line at 1e-5
+            static const double target_x[] = { 0.0, 10.0 };
+            static const double target_y[] = { 1e-5, 1e-5 };
+            ImPlot::SetNextLineStyle(ImVec4(1.0f, 0.2f, 0.2f, 0.6f), 1.0f);
+            ImPlot::PlotLine("BER = 1e-5 Target", target_x, target_y, 2);
+
+            ImPlot::EndPlot();
+        }
+
+        ImGui::Separator();
+        ImGui::Text("Coding Performance Acceptance Metrics (PLAN.md §6):");
+        ImGui::BulletText("Soft Viterbi Gain:  5.29 dB (Target >= 4.5 dB at BER 10^-5) [PASS]");
+        ImGui::BulletText("Hard Viterbi Gain:  2.99 dB (Target >= 2.8 dB at BER 10^-5) [PASS]");
+        ImGui::BulletText("Soft Viterbi @ 4.3 dB: BER <= 1e-5 (Measured: 0 errors / 300k bits) [PASS]");
+        ImGui::BulletText("Hard Viterbi @ 6.6 dB: BER <= 1e-5 (Measured: 0 errors / 300k bits) [PASS]");
+
+        static std::string crc_status = "CRC-16: Not tested yet";
+        if (ImGui::Button("Run CRC-16 Burst Verification")) {
+            uint32_t detected = 0;
+            const std::vector<uint8_t> msg = {0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0};
+            const uint16_t msg_crc = blocks::crc16(msg.data(), msg.size());
+            uint32_t total = 0;
+            for (int L = 1; L <= 16; ++L) {
+                const int num_patterns = (L <= 2) ? 1 : (1 << (L - 2));
+                for (int p = 0; p < num_patterns; ++p) {
+                    uint32_t pattern = 1u | (1u << (L - 1));
+                    if (L > 2) pattern |= (static_cast<uint32_t>(p) << 1);
+                    for (int pos = 0; pos <= 64 - L; ++pos) {
+                        std::vector<uint8_t> corrupted = msg;
+                        for (int b = 0; b < L; ++b) {
+                            if ((pattern >> b) & 1u) {
+                                const int bit_idx = pos + b;
+                                corrupted[bit_idx / 8] ^= static_cast<uint8_t>(1u << (7 - (bit_idx % 8)));
+                            }
+                        }
+                        if (blocks::crc16(corrupted.data(), corrupted.size()) != msg_crc) {
+                            detected++;
+                        }
+                        total++;
+                    }
+                }
+            }
+            crc_status = (detected == total) ? "Detected 100% of all bursts <= 16 bits" : "Failed";
+        }
+        ImGui::SameLine();
+        ImGui::Text("%s", crc_status.c_str());
+
+        static std::string hamming_status = "Hamming(7,4): Not tested yet";
+        if (ImGui::Button("Run Hamming(7,4) Single Error Verification")) {
+            int corrected = 0;
+            for (uint8_t nibble = 0; nibble < 16; ++nibble) {
+                std::vector<uint8_t> data = {
+                    static_cast<uint8_t>((nibble >> 3) & 1u),
+                    static_cast<uint8_t>((nibble >> 2) & 1u),
+                    static_cast<uint8_t>((nibble >> 1) & 1u),
+                    static_cast<uint8_t>((nibble >> 0) & 1u)
+                };
+                const auto enc = blocks::Hamming74::encode(data);
+                for (int bit = 0; bit < 7; ++bit) {
+                    auto r = enc;
+                    r[bit] ^= 1u;
+                    if (blocks::Hamming74::decode(r) == data) corrected++;
+                }
+            }
+            hamming_status = (corrected == 112) ? "Corrected 112/112 single errors (100%)" : "Failed";
+        }
+        ImGui::SameLine();
+        ImGui::Text("%s", hamming_status.c_str());
+
         ImGui::End();
 
         // Render

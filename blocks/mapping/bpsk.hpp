@@ -26,10 +26,11 @@ public:
               std::vector<engine::Stream<engine::cf>*>& out,
               size_t n) override {
         if (in.empty() || !in[0] || out.empty() || !out[0]) return;
-        out[0]->resize(n);
+        const size_t in_n = in[0]->buf.empty() ? n : in[0]->buf.size();
+        out[0]->resize(in_n);
         const auto& b = in[0]->buf;
         auto& s = out[0]->buf;
-        for (size_t i = 0; i < n; ++i)
+        for (size_t i = 0; i < in_n; ++i)
             s[i] = engine::cf(b[i].real() > 0.5f ? -1.f : 1.f, 0.f);
     }
 };
@@ -43,10 +44,11 @@ public:
               std::vector<engine::Stream<engine::cf>*>& out,
               size_t n) override {
         if (in.empty() || !in[0] || out.empty() || !out[0]) return;
-        out[0]->resize(n);
+        const size_t in_n = in[0]->buf.empty() ? n : in[0]->buf.size();
+        out[0]->resize(in_n);
         const auto& r = in[0]->buf;
         auto& b = out[0]->buf;
-        for (size_t i = 0; i < n; ++i)
+        for (size_t i = 0; i < in_n; ++i)
             b[i] = engine::cf(r[i].real() < 0.f ? 1.f : 0.f, 0.f);
     }
 };

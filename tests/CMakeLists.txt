@@ -81,3 +81,20 @@ target_compile_options(test_shaping PRIVATE
 )
 catch_discover_tests(test_shaping)
 
+# ---- M5: coding blocks (CRC-16, Hamming74, Soft/Hard Viterbi, Interleaver) ----
+add_executable(test_coding test_coding.cpp)
+target_link_libraries(test_coding
+    PRIVATE
+        engine
+        Catch2::Catch2WithMain
+        Threads::Threads
+)
+target_include_directories(test_coding PRIVATE
+    ${CMAKE_SOURCE_DIR}
+)
+target_compile_options(test_coding PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra>
+)
+catch_discover_tests(test_coding)
+
+
