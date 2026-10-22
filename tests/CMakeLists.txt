@@ -64,3 +64,20 @@ target_compile_options(test_density PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra>
 )
 catch_discover_tests(test_density)
+
+# ---- M4: pulse shaping, matched filter, ISI FIR channel, eye diagram ----
+add_executable(test_shaping test_shaping.cpp)
+target_link_libraries(test_shaping
+    PRIVATE
+        engine
+        Catch2::Catch2WithMain
+        Threads::Threads
+)
+target_include_directories(test_shaping PRIVATE
+    ${CMAKE_SOURCE_DIR}
+)
+target_compile_options(test_shaping PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra>
+)
+catch_discover_tests(test_shaping)
+

@@ -247,6 +247,9 @@ int main(int /*argc*/, char** /*argv*/)
         }
         uint32_t constel_tex = constel_renderer.render();
 
+        static float ui_timing_offset = 0.0f;
+        static float measured_eye_opening = 0.0f;
+
         // Update eye diagram density renderer from simulation stream
         auto eye_buf = sim.getEyeBuffer();
         if (eye_buf && eye_buf->has_new()) {
@@ -254,6 +257,7 @@ int main(int /*argc*/, char** /*argv*/)
             if (!e_snap.times.empty()) {
                 eye_renderer.decay();
                 eye_renderer.accumulateEye(e_snap.times.data(), e_snap.amplitudes.data(), e_snap.times.size());
+                measured_eye_opening = blocks::EyeProbe::measureEyeOpening(e_snap, 1.0f, 0.08f, 128);
             }
         }
         uint32_t eye_tex = eye_renderer.render();
@@ -276,6 +280,30 @@ int main(int /*argc*/, char** /*argv*/)
         ImGui::Text("Eb/N0: %.2f dB", ui_ebn0);
         if (ImGui::SliderFloat("Eb/N0 (dB)", &ui_ebn0, 0.0f, 16.0f, "%.1f dB")) {
             sim.setParam("ebn0_db", static_cast<double>(ui_ebn0));
+        }
+
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.2f, 1.0f), "Pulse Shaping & ISI (M4)");
+        static bool ui_shaping = false;
+        if (ImGui::Checkbox("RRC Pulse Shaping", &ui_shaping)) {
+            sim.setShapingEnabled(ui_shaping);
+            constel_renderer.clear();
+            eye_renderer.clear();
+        }
+        static float ui_beta = 0.35f;
+        if (ui_shaping) {
+            if (ImGui::SliderFloat("Roll-off Beta", &ui_beta, 0.10f, 1.00f, "%.2f")) {
+                sim.setBeta(ui_beta);
+            }
+        }
+        static bool ui_isi = false;
+        if (ImGui::Checkbox("Multipath ISI Channel [1, 0.5, 0.3]", &ui_isi)) {
+            sim.setIsiEnabled(ui_isi);
+            constel_renderer.clear();
+            eye_renderer.clear();
+        }
+        if (ImGui::SliderFloat("Timing Offset", &ui_timing_offset, -4.0f, 4.0f, "%.2f samples")) {
+            sim.setTimingOffset(ui_timing_offset);
         }
 
         ImGui::Separator();
@@ -406,6 +434,19 @@ int main(int /*argc*/, char** /*argv*/)
         }
         if (ImGui::Button("Clear Eye")) {
             eye_renderer.clear();
+        }
+
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Eye Metrics & Timing (M4)");
+        if (measured_eye_opening > 0.45f) {
+            ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.4f, 1.0f), "Eye Opening: %.3f (OPEN)", measured_eye_opening);
+        } else if (measured_eye_opening > 0.0f) {
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.3f, 1.0f), "Eye Opening: %.3f (CLOSED / ISI)", measured_eye_opening);
+        } else {
+            ImGui::TextDisabled("Eye Opening: -- (Symbol Mode)");
+        }
+        if (ImGui::SliderFloat("Timing-Offset Slider", &ui_timing_offset, -4.0f, 4.0f, "%.2f samples")) {
+            sim.setTimingOffset(ui_timing_offset);
         }
         ImGui::End();
 

@@ -25,11 +25,23 @@
 #include <cstdint>
 #include "block.hpp"
 
+#include <deque>
+
 namespace engine {
 
 class BerProbe : public Block {
 public:
     const char* name() const override { return "BerProbe"; }
+
+    void setDelay(size_t delay_bits) { delay_ = delay_bits; }
+    size_t delay() const { return delay_; }
+
+    void setParam(const std::string& key, double v) override {
+        if (key == "delay" && v >= 0.0) {
+            delay_ = static_cast<size_t>(v);
+        }
+        if (params) params->set(key, v);
+    }
 
     // in[0]: tx bits  (cf.real() = 0.0f or 1.0f)
     // in[1]: rx bits  (cf.real() = 0.0f or 1.0f)
@@ -40,14 +52,32 @@ public:
         const auto& tx = in[0]->buf;
         const auto& rx = in[1]->buf;
         uint64_t err = 0;
+
+        if (delay_ == 0) {
+            for (size_t i = 0; i < n && i < tx.size() && i < rx.size(); ++i) {
+                // compare rounded integer bits
+                int tb = (tx[i].real() > 0.5f) ? 1 : 0;
+                int rb = (rx[i].real() > 0.5f) ? 1 : 0;
+                err += (tb != rb) ? 1u : 0u;
+            }
+            errors_.fetch_add(err, std::memory_order_relaxed);
+            total_.fetch_add(static_cast<uint64_t>(n), std::memory_order_relaxed);
+            return;
+        }
+
+        uint64_t valid = 0;
         for (size_t i = 0; i < n && i < tx.size() && i < rx.size(); ++i) {
-            // compare rounded integer bits
-            int tb = (tx[i].real() > 0.5f) ? 1 : 0;
-            int rb = (rx[i].real() > 0.5f) ? 1 : 0;
-            err += (tb != rb) ? 1u : 0u;
+            tx_queue_.push_back(tx[i].real() > 0.5f ? 1 : 0);
+            if (tx_queue_.size() > delay_) {
+                int tb = tx_queue_.front();
+                tx_queue_.pop_front();
+                int rb = (rx[i].real() > 0.5f) ? 1 : 0;
+                err += (tb != rb) ? 1u : 0u;
+                valid++;
+            }
         }
         errors_.fetch_add(err, std::memory_order_relaxed);
-        total_.fetch_add(static_cast<uint64_t>(n), std::memory_order_relaxed);
+        total_.fetch_add(valid, std::memory_order_relaxed);
     }
 
     /// Snapshot: returns {errors, total}. Reset optional.
@@ -59,6 +89,7 @@ public:
         if (reset) {
             errors_.store(0, std::memory_order_relaxed);
             total_.store(0, std::memory_order_relaxed);
+            tx_queue_.clear();
         }
         return s;
     }
@@ -66,6 +97,7 @@ public:
     void reset() {
         errors_.store(0, std::memory_order_relaxed);
         total_.store(0, std::memory_order_relaxed);
+        tx_queue_.clear();
     }
 
     double ber() const {
@@ -78,6 +110,8 @@ public:
 private:
     std::atomic<uint64_t> errors_{0};
     std::atomic<uint64_t> total_{0};
+    size_t delay_ = 0;
+    std::deque<int> tx_queue_;
 };
 
 }  // namespace engine
