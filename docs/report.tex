@@ -19,36 +19,136 @@
 \pagestyle{fancy}
 \fancyhf{}
 \rhead{\small commsim-studio Technical Report}
-\lhead{\small Milestone M8: Final System Engineering Report}
+\lhead{\small Digital Communications Simulation \& Visualization}
 \rfoot{\small Page \thepage}
-
-\title{\textbf{commsim-studio: A High-Performance Deterministic Simulation and GPU-Accelerated Visualization Engine for Data Communications}\\[0.5em]
-\large Complete Architecture, Theoretical Validation, and Educational Curriculum Mapping}
-\author{\textbf{Advanced Agentic Coding Project} \\
-Data Communications \& Digital Signal Processing Division}
-\date{October 2026}
 
 \begin{document}
 
-\maketitle
+% =============================================================================
+% Title Page
+% =============================================================================
+\begin{titlepage}
+\centering
+\vspace*{1.5cm}
+
+{\Huge \textbf{commsim-studio}}\\[0.8em]
+{\Large \textbf{A High-Performance Deterministic Simulation and GPU-Accelerated Visualization Engine for Data Communications}}\\[1.5em]
+{\large System Architecture, Digital Signal Processing Pipeline, and Experimental Validation Report}\\[3.0cm]
+
+\textbf{Student Author:}\\
+{\Large [NAME]}\\[1.0cm]
+
+\textbf{Course:}\\
+{\Large [COURSE]}\\[1.0cm]
+
+\textbf{Institution \& Division:}\\
+Data Communications \& Digital Signal Processing Division\\[1.5cm]
+
+\textbf{Date:}\\
+October 2026\\[2.0cm]
+
+\vfill
+\noindent\rule{\linewidth}{0.4pt}\\[0.5em]
+{\small Visual Studio Code Dark+ User Interface Overhaul $\bullet$ C++17 Clean Core $\bullet$ OpenGL 3.3 Phosphor Persistence $\bullet$ Catch2 Test Suite}
+\end{titlepage}
+
+\twocolumn
 
 \begin{abstract}
-\noindent We present \textbf{commsim-studio}, a modern C++17 digital communication simulation and interactive visualization engine engineered for high-performance laboratory instruction and research. The system addresses two persistent challenges in communication engineering pedagogy: the computational latency of traditional interpreted simulation environments and the lack of real-time intuition regarding dynamic physical-layer phenomena. \textit{commsim-studio} features a wait-free multi-threaded pipeline coupling a deterministic DSP graph to an OpenGL 3.3 GPU phosphor density renderer capable of accumulating 1,000,000 points/second at 60 frames/second. We demonstrate bit-identical reproducible results across varying thread counts via a counter-based PCG pseudo-random number generator keyed by $(\text{seed}, \text{block\_id}, \text{sample\_index})$. Across comprehensive testing with 59 test suites, we empirically validate all theoretical benchmarks: Nyquist pulse shaping (zero ISI error $< 3.6 \times 10^{-5}$), Soft Viterbi $K=7$ coding gain ($> 5.3\text{ dB}$ at $\text{BER}=10^{-5}$), Shannon capacity boundaries, Carson's rule bandwidth, orthogonal Walsh CDMA (zero multi-user interference across 12 simultaneous users), and Stop-and-Wait/Go-Back-N ARQ throughput efficiency (within $0.39\%$ of theory). The headless engine achieves $115.8\text{ Mbit/s}$ uncoded BPSK and $170.5\text{ Mbit/s}$ 16-QAM throughput on a single core, surpassing performance targets by up to $11.3\times$.
+\noindent We present \textbf{commsim-studio}, a modern C++17 digital communication simulation and interactive visualization engine engineered for high-performance laboratory instruction and research. The system addresses two persistent challenges in communication engineering pedagogy: the computational latency of traditional interpreted simulation environments and the lack of real-time intuition regarding dynamic physical-layer phenomena. \textit{commsim-studio} features a wait-free multi-threaded pipeline coupling a deterministic DSP graph to an OpenGL 3.3 GPU phosphor density renderer capable of accumulating 1,000,000 points/second at 60 frames/second. We demonstrate bit-identical reproducible results across varying thread counts via a counter-based PCG pseudo-random number generator keyed by $(\text{seed}, \text{block\_id}, \text{sample\_index})$. Across comprehensive testing with 59 tests, we empirically validate all theoretical benchmarks: Nyquist pulse shaping (zero ISI error $< 3.6 \times 10^{-5}$), Soft Viterbi $K=7$ coding gain ($> 5.3\text{ dB}$ at $\text{BER}=10^{-5}$), Shannon capacity boundaries, Carson's rule bandwidth, orthogonal Walsh CDMA (zero multi-user interference across 12 simultaneous users), and Stop-and-Wait/Go-Back-N ARQ throughput efficiency (within $0.39\%$ of theory). The headless engine achieves $115.8\text{ Mbit/s}$ uncoded BPSK and $170.5\text{ Mbit/s}$ 16-QAM throughput on a single core, surpassing performance targets by up to $11.3\times$.
 \end{abstract}
 
-\section{Introduction \& Motivation}
-University curricula in Data Communications, Telecommunications, and Digital Signal Processing (DSP) demand hands-on exploration of topics spanning physical-layer modulation, pulse shaping, channel coding, multiple-access protocols, and packet encapsulation. Historically, students have relied either on static offline batch scripts (e.g., in MATLAB or GNU Radio) which fail to provide responsive parameter-adjustment feedback, or on simplified toys lacking real physical-layer fidelity.
+% =============================================================================
+% Chapter 1: Foundations of Data Communications
+% =============================================================================
+\section{Foundations of Data Communications Systems}
 
-When learning concepts such as Inter-Symbol Interference (ISI), matched filtering, or the Viterbi decoding waterfall curve, interactive feedback is paramount. Adjusting a filter roll-off parameter $\beta$ or multipath reflection coefficient and seeing the eye diagram instantaneously collapse at 60 frames per second builds physical intuition that static plots cannot convey.
+\subsection{Historical Evolution of Communications}
+Data communications represents the physical transmission and reception of digital representations of information across geographically separated points. The origins of contemporary telecommunications trace back to optical semaphore telegraphs developed by Claude Chappe in late eighteenth-century France. The invention of the electrical telegraph by Samuel Morse in 1844 marked the dawn of electrical communications, replacing physical transmission delay with propagation near the speed of light over copper wire and introducing Morse code as one of the earliest practical variable-length discrete symbol alphabets.
 
-\textit{commsim-studio} was designed from the ground up under strict architectural principles:
+Alexander Graham Bell's introduction of the telephone in 1876 shifted focus toward analog continuous-time speech transmission. In the late nineteenth century, James Clerk Maxwell's theoretical unification of electromagnetism, empirically demonstrated by Heinrich Hertz in 1888 and commercialized by Guglielmo Marconi, removed physical wiring constraints, establishing unguided radio propagation. 
+
+The theoretical maturation of communications occurred during the mid-twentieth century. In 1928, Harry Nyquist established the minimum sampling frequency required to reconstruct bandlimited signals without aliasing and formulated the criteria for pulse shaping to transmit symbols over a bandlimited channel without intersymbol interference. Ralph Hartley recognized that the maximum information that can be transmitted through a channel is constrained by bandwidth and available transmission time. In 1948, Claude Shannon published his seminal work, \textit{A Mathematical Theory of Communication}, founding the mathematical discipline of information theory. Shannon proved that every physical channel possesses a finite information-carrying capacity $C$; as long as the information transmission rate $R$ remains strictly below $C$, there exist channel coding schemes that permit transmission with an arbitrarily small probability of bit error. 
+
+The creation of the ARPANET in 1969 by the United States Department of Defense established packet-switching architecture, demonstrating that sharing transmission lines dynamically via statistically multiplexed packets offered vastly superior resilience and efficiency over dedicated circuit-switched telephone networks. This evolution laid the foundation for modern global digital communications, from terrestrial fiber-optic links to cellular standards and satellite constellations.
+
+\subsection{Elements of a Communications Link}
+Every communication system, regardless of complexity or scale, decomposes into five fundamental physical elements:
 \begin{enumerate}
-    \item \textbf{C++17 Clean Architecture}: Zero raw owning pointers, zero mutable global state, and strict adherence to RAII.
-    \item \textbf{Strict Bit-Identical Determinism}: Identical bit error rate (BER) curves whether executing sequentially on 1 core or in parallel across 8 worker threads.
-    \item \textbf{Wait-Free GPU Density Visualization}: Custom OpenGL 3.3 point-sprite accumulation into floating-point framebuffers with temporal phosphor decay, visualizing constellation clusters and eye openings at 60 FPS.
-    \item \textbf{Full Syllabus Coverage}: Bridging theoretical foundations (Shannon capacity, Nyquist criterion, Viterbi MLSE, Walsh Hadamard matrices, Stallings ARQ) to real-world RFC-compliant packet structures.
+    \item \textbf{Information Source}: Produces the original message signal, either continuous in time and amplitude (e.g., analog speech, sensor voltages) or intrinsically discrete (e.g., computer text, executable binary files).
+    \item \textbf{Transmitter (Modulator and Encoder)}: Converts the source message into a form physically compatible with the transmission medium. This process encompasses source coding (data compression to eliminate redundancy), channel coding (error-detecting and error-correcting codes to provide robustness against channel errors), and modulation (translating baseband sequences into high-frequency passband electromagnetic waves or shaped baseband waveforms).
+    \item \textbf{Physical Transmission Channel}: The physical medium through which signals propagate. Channels fall into two broad classifications: \textit{guided media} (twisted-pair copper lines, coaxial cables, and low-loss silica optical fibers) and \textit{unguided media} (free-space radio propagation, microwave line-of-sight links, and satellite links). 
+    \item \textbf{Receiver (Demodulator and Decoder)}: Recovers the original transmitted information from the received signal. The receiver performs front-end amplification, matched filtering to maximize signal-to-noise ratio, carrier frequency and phase synchronization, symbol clock recovery, channel equalization to counteract dispersion, demodulation, error correction decoding, and source decompression.
+    \item \textbf{Information Sink}: The ultimate human user, computer storage medium, or software application that consumes the decoded information.
 \end{enumerate}
 
+Throughout propagation across any physical medium, transmitted signals inevitably suffer from four primary physical degradations:
+\begin{itemize}
+    \item \textit{Attenuation}: Exponential loss of signal power over distance, requiring periodic repeaters or low-noise amplifiers.
+    \item \textit{Thermal Noise}: Unavoidable additive noise arising from thermal agitation of charge carriers inside electronic components, mathematically modeled as Additive White Gaussian Noise (AWGN) with constant power spectral density $N_0/2$.
+    \item \textit{Distortion and Dispersion}: Frequency-dependent phase velocity and attenuation across the channel passband, causing transmitted pulses to spread in time and overlap adjacent symbol intervals.
+    \item \textit{Interference}: Unwanted energy coupled into the receiver from external radio transmitters, adjacent channels, co-channel cellular base stations, or multi-user cross-talk.
+\end{itemize}
+
+\subsection{Key Concepts and Quantitative Metrics}
+Rigorous analysis of digital transmission relies upon precise engineering metrics:
+\begin{itemize}
+    \item \textbf{Baud Rate ($R_s$)}: The symbol signaling rate in baud (symbols/second), representing how frequently the physical channel state transitions.
+    \item \textbf{Bit Rate ($R_b$)}: The net data throughput in bits per second. For an $M$-ary modulation scheme encoding $k = \log_2 M$ bits per symbol, $R_b = k R_s$.
+    \item \textbf{Bandwidth ($W$)}: The range of frequencies over which the channel or signal conveys significant power, measured in Hertz (Hz).
+    \item \textbf{Signal-to-Noise Ratio (SNR)}: The ratio of total average received signal power $P_s$ to total noise power $P_n = N_0 W$ within the receiver bandwidth: $\text{SNR} = P_s / (N_0 W)$.
+    \item \textbf{Energy per Bit to Noise Density Ratio ($E_b/N_0$)}: A normalized, dimensionless metric allowing direct comparison between modulation and coding schemes independent of bandwidth or data rate:
+    \begin{equation}
+    \frac{E_b}{N_0} = \frac{P_s / R_b}{N_0} = \text{SNR} \cdot \frac{W}{R_b}
+    \end{equation}
+    \item \textbf{Bit Error Rate (BER)}: The probability that a received and decoded bit differs from the transmitted bit: $P_b = N_{\text{err}} / N_{\text{total}}$.
+    \item \textbf{Spectral Efficiency ($\eta$)}: The information throughput achieved per unit of bandwidth, expressed in bits/second/Hertz ($\eta = R_b / W$).
+\end{itemize}
+
+\subsection{Engineering Trade-offs in System Design}
+Communication systems engineering is fundamentally governed by trade-offs among five competing operational constraints:
+\begin{enumerate}
+    \item \textbf{Transmitter Power}: Portable mobile devices operate under strict battery envelopes; satellite links are constrained by solar panel capacity. Increasing transmission power improves received SNR and lowers BER, but increases power dissipation, equipment weight, and co-channel interference to neighboring systems.
+    \item \textbf{Transmission Bandwidth}: Radio frequency spectrum is a finite, heavily regulated natural resource. High-order modulation schemes (e.g., 64-QAM, 256-QAM) pack more bits into each Hertz of bandwidth, achieving high spectral efficiency, but compress the Euclidean distance between constellation symbols, requiring substantially higher $E_b/N_0$ to avoid catastrophic error rates.
+    \item \textbf{Hardware Complexity}: Advanced digital signal processing techniques, such as maximum-likelihood sequence estimation (Viterbi decoding), high-order LDPC iterative belief propagation, and adaptive rake receivers, provide substantial coding gain and multipath resilience, but demand high silicon gate counts, memory bandwidth, and power consumption.
+    \item \textbf{Latency Budgets}: Interactive applications (such as tele-surgery, autonomous vehicle control, and real-time audio) mandate round-trip network latencies under tens of milliseconds. Large block interleavers and deep turbo decoding iterations disperse burst errors effectively but introduce unacceptable buffering delays.
+    \item \textbf{Economic Cost}: Infrastructure deployment costs dictate pragmatic compromises between theoretically optimal architectures and commercially viable transceivers.
+\end{enumerate}
+
+\subsection{Standards and Regulatory Bodies}
+To enable worldwide communication, hardware components manufactured by disparate commercial entities must achieve strict interoperability. Standardization is overseen by international governing bodies:
+\begin{itemize}
+    \item \textbf{International Telecommunication Union (ITU)}: Specialized agency of the United Nations responsible for global radio frequency spectrum allocation, satellite orbit assignments, and telecommunication standards (ITU-T and ITU-R).
+    \item \textbf{Institute of Electrical and Electronics Engineers (IEEE)}: Develops pervasive physical and data link layer standards, notably IEEE 802.3 (Ethernet) and IEEE 802.11 (Wi-Fi).
+    \item \textbf{Internet Engineering Task Force (IETF)}: Defines internet protocols, architectures, and operational conventions through published Requests for Comments (RFCs), governing IPv4, IPv6, TCP, UDP, and routing protocols.
+    \item \textbf{International Organization for Standardization (ISO)}: Established the conceptual seven-layer Reference Model for Open Systems Interconnection.
+\end{itemize}
+
+\subsection{Layered Architectures: OSI vs. TCP/IP}
+To manage the complexity of end-to-end communication, network protocols are partitioned into functional layers, where each layer provides standardized services to the layer above while hiding implementation details of lower layers.
+
+The \textbf{ISO Open Systems Interconnection (OSI) 7-Layer Model} represents a rigorous conceptual reference framework:
+\begin{enumerate}
+    \item \textit{Layer 1 (Physical)}: Transmission of raw, unstructured bit streams over physical media (voltages, light pulses, RF carriers).
+    \item \textit{Layer 2 (Data Link)}: Framing, physical hardware addressing (MAC), link-level flow control, and error detection (CRC).
+    \item \textit{Layer 3 (Network)}: Logical addressing (IP), path routing across multi-hop networks, and packet forwarding.
+    \item \textit{Layer 4 (Transport)}: End-to-end process-to-process communication, connection management, segmentation, and reliable delivery (TCP).
+    \item \textit{Layer 5 (Session)}: Dialog control, session synchronization, and checkpointing.
+    \item \textit{Layer 6 (Presentation)}: Syntax negotiation, character encoding translation, data compression, and cryptographic encryption.
+    \item \textit{Layer 7 (Application)}: User application protocols (HTTP, SMTP, DNS, SSH).
+\end{enumerate}
+
+In contrast, the pragmatic \textbf{TCP/IP (DARPA) 4-Layer Architecture} emerged from operational implementations and forms the backbone of the global Internet:
+\begin{enumerate}
+    \item \textit{Network Access Layer (Link Layer)}: Combines OSI Layers 1 and 2, defining device drivers and network interface cards (e.g., Ethernet II frames).
+    \item \textit{Internet Layer}: Corresponds to OSI Layer 3, utilizing the Internet Protocol (IPv4/IPv6) to route datagrams across heterogeneous networks.
+    \item \textit{Transport Layer}: Corresponds to OSI Layer 4, providing connection-oriented reliable byte streams via Transmission Control Protocol (TCP) or connectionless unreliable datagrams via User Datagram Protocol (UDP).
+    \item \textit{Application Layer}: Combines OSI Layers 5, 6, and 7 into integrated protocol specifications where applications directly manage session logic, presentation formatting, and user interaction.
+\end{enumerate}
+
+% =============================================================================
+% Chapter 2: Theoretical Foundations
+% =============================================================================
 \section{Theoretical Foundations}
 
 \subsection{Digital Modulation \& Decision Theory}
@@ -77,11 +177,11 @@ P_b(\text{64-QAM}) \approx \frac{7}{24} \text{erfc}\left(\sqrt{\frac{E_b}{7 N_0}
 \end{figure}
 
 \subsection{Nyquist ISI Criterion \& Matched Filtering}
-To prevent Inter-Symbol Interference (ISI) in bandlimited channels, the composite impulse response $h(t) = g(t) * c(t) * g^*(-t)$ must satisfy the Nyquist first criterion $h(k T_{\text{sym}}) = \delta_{k0}$. Using Root-Raised-Cosine (RRC) filters at both transmitter and receiver with roll-off $\beta = 0.35$:
+To prevent Inter-Symbol Interference (ISI) in bandlimited channels, the composite impulse response $h(t) = g(t) * c(t) * g^*(-t)$ must satisfy the Nyquist first criterion $h(k T_{\text{sym}}) = \delta_{k0}$. Using Root-Raised-Cosine (RRC) matched filters $H_{\text{RRC}}(f)$ at both transmitter and receiver with roll-off factor $\beta = 0.35$, the composite frequency response is the full Raised-Cosine spectrum $H_{\text{RC}}(f) = |H_{\text{RRC}}(f)|^2$:
 \begin{equation}
 H_{\text{RC}}(f) = \begin{cases}
 T_{\text{sym}}, & |f| \le \frac{1-\beta}{2 T_{\text{sym}}} \\
-\frac{T_{\text{sym}}}{2}\left[1 + \cos\left(\frac{\pi T_{\text{sym}}}{\beta}\left(|f| - \frac{1-\beta}{2 T_{\text{sym}}}\right)\right)\right], & \dots \\
+\frac{T_{\text{sym}}}{2}\left[1 + \cos\left(\frac{\pi T_{\text{sym}}}{\beta}\left(|f| - \frac{1-\beta}{2 T_{\text{sym}}}\right)\right)\right], & \frac{1-\beta}{2 T_{\text{sym}}} < |f| \le \frac{1+\beta}{2 T_{\text{sym}}} \\
 0, & |f| > \frac{1+\beta}{2 T_{\text{sym}}}
 \end{cases}
 \end{equation}
@@ -104,7 +204,7 @@ Soft-decision Euclidean branch metrics yield an asymptotic coding gain exceeding
 \begin{figure}[htbp]
 \centering
 \includegraphics[width=\linewidth]{screenshots/03_coding_gain.png}
-\caption{Coded BER waterfall curves: Uncoded BPSK, Hamming(7,4), and Rate-1/2 $K=7$ Viterbi (Hard and Soft decisions), demonstrating $5.3\text{ dB}$ soft coding gain.}
+\caption{Coded BER waterfall curves: Uncoded BPSK, Hamming(7,4), and Rate-1/2 $K=7$ Viterbi (Hard and Soft decisions), demonstrating $5.43\text{ dB}$ soft coding gain at $10^{-5}$.}
 \label{fig:coding}
 \end{figure}
 
@@ -181,6 +281,9 @@ Simulated throughput efficiencies match theoretical formulas within $< 0.4\%$ er
 \label{fig:arq}
 \end{figure}
 
+% =============================================================================
+% Chapter 3: System Architecture
+% =============================================================================
 \section{System Architecture}
 
 \subsection{Topological Stream Graph \& Scheduler}
@@ -208,9 +311,12 @@ The protocol stack serializes application payloads across four layers of the TCP
 \label{fig:encap}
 \end{figure}
 
+% =============================================================================
+% Chapter 4: Validation & Benchmarks
+% =============================================================================
 \section{Validation and Acceptance Matrix}
 
-Table~\ref{tab:acceptance} compiles all theoretical benchmarks defined in \textit{PLAN.md} Sections 6 and 7 against measured experimental data produced by the automated test suite.
+Table~\ref{tab:acceptance} compiles all theoretical benchmarks defined in \textit{PLAN.md} Sections 6 and 7 against measured experimental data produced by the automated test suite across 59 tests.
 
 \begin{table*}[t]
 \centering
@@ -242,13 +348,13 @@ M8 & 16-QAM Throughput & Single-core target $\ge 15.0\text{ Mbit/s}$ & $\mathbf{
 M8 & Soft Viterbi Throughput & Single-core target $\ge 1.0\text{ Mbit/s info}$ & $\mathbf{5.01\text{ Mbit/s info}}$ & $\mathbf{5.0\times}$ target & \textbf{PASS} \\
 \bottomrule
 \end{tabular}
-\caption{Comprehensive validation matrix comparing theoretical benchmarks with experimental measurements.}
+\caption{Comprehensive validation matrix comparing theoretical benchmarks with experimental measurements across 59 tests.}
 \label{tab:acceptance}
 \end{table*}
 
 \section{Performance Benchmarks}
 
-Headless single-core benchmarks were conducted on an x86\_64 Linux host (Release build with GCC 13.3 and \texttt{-O3}). Table~\ref{tab:perf} highlights achieved throughput against the performance specification from \textit{PLAN.md} Section 9.
+Headless single-core benchmarks were conducted on an x86\_64 Linux host (Release build with GCC 13.3 and \texttt{-O3}). Table~\ref{tab:perf} highlights achieved throughput against the performance specification from \textit{PLAN.md} Section 9, including measured frame times across all visited tabs.
 
 \begin{table}[htbp]
 \centering
@@ -260,7 +366,7 @@ Headless single-core benchmarks were conducted on an x86\_64 Linux host (Release
 Uncoded BPSK / QPSK Headless & $\ge 20.0\text{ Mbit/s}$ & $\mathbf{115.8\text{ Mbit/s}}$ \\
 16-QAM Headless & $\ge 15.0\text{ Mbit/s}$ & $\mathbf{170.5\text{ Mbit/s}}$ \\
 Soft Viterbi Rate-1/2 $K=7$ & $\ge 1.0\text{ Mbit/s info}$ & $\mathbf{5.01\text{ Mbit/s info}}$ \\
-Viewer Render Loop & $60\text{ FPS}$ & $\mathbf{60.1\text{ FPS}}$ \\
+Viewer Frame Time (All Tabs) & $\le 16.6\text{ ms (60 FPS)}$ & $\mathbf{3.65\text{ ms med / 26.70\text{ ms p99}}}$ \\
 Parameter Change Latency & $< 100\text{ ms}$ & $\mathbf{60.0\text{ ms}}$ \\
 Sweep Scaling (8 Threads) & $\ge 6.0\times$ & $\mathbf{7.1\times}$ \\
 \bottomrule
@@ -280,18 +386,18 @@ Table~\ref{tab:syllabus} maps core topics from standard undergraduate Data Commu
 \toprule
 \textbf{Syllabus Topic} & \textbf{Implementation} & \textbf{Viewer Panel} \\
 \midrule
-Signals \& Spectra & \texttt{spectrum\_probe.hpp} & Analog \& Spectrum \\
-Channel Capacity & \texttt{psk8.hpp}, \texttt{qam64.hpp} & Channel Capacity \\
-Baseband ISI \& Eye & \texttt{rrc\_filter.hpp}, \texttt{isi\_fir.hpp} & Pulse Shaping \& Eye \\
-Matched Filtering & \texttt{matched\_filter.hpp} & Pulse Shaping \& Eye \\
-Convolutional Coding & \texttt{conv\_k7.hpp}, \texttt{viterbi.hpp} & Coding \& FEC \\
-Block Codes & \texttt{hamming74.hpp}, \texttt{crc16.hpp} & Coding \& FEC \\
-Analog Modulation & \texttt{am.hpp}, \texttt{fm.hpp}, \texttt{pm.hpp} & Waveforms \& Spectrum \\
-Digital M-ary & \texttt{bpsk.hpp}, \texttt{qam16.hpp} & Constellation \& BER \\
-Source Coding & \texttt{pcm.hpp}, \texttt{delta\_mod.hpp} & Analog \& Spectrum \\
-Multiple Access & \texttt{cdma.hpp}, \texttt{tdma.hpp}, \texttt{fdma.hpp} & Protocol \& Access \\
-Link Protocols & \texttt{framer.hpp}, \texttt{arq.hpp} & Protocol \& Access \\
-TCP/IP Encapsulation & \texttt{packet\_encap.hpp} & Protocol \& Access \\
+Signals \& Spectra & \texttt{spectrum\_probe.hpp} & Spectrum \\
+Channel Capacity & \texttt{psk8.hpp}, \texttt{qam64.hpp} & Capacity \\
+Baseband ISI \& Eye & \texttt{rrc\_filter.hpp}, \texttt{isi\_fir.hpp} & Eye \& Shaping \\
+Matched Filtering & \texttt{matched\_filter.hpp} & Eye \& Shaping \\
+Convolutional Coding & \texttt{conv\_k7.hpp}, \texttt{viterbi.hpp} & BER \& Coding \\
+Block Codes & \texttt{hamming74.hpp}, \texttt{crc16.hpp} & BER \& Coding \\
+Analog Modulation & \texttt{am.hpp}, \texttt{fm.hpp}, \texttt{pm.hpp} & Spectrum \\
+Digital M-ary & \texttt{bpsk.hpp}, \texttt{qam16.hpp} & Constellation \\
+Source Coding & \texttt{pcm.hpp}, \texttt{delta\_mod.hpp} & Spectrum \\
+Multiple Access & \texttt{cdma.hpp}, \texttt{tdma.hpp}, \texttt{fdma.hpp} & Multiple Access \\
+Link Protocols & \texttt{framer.hpp}, \texttt{arq.hpp} & Protocol \& ARQ \\
+TCP/IP Encapsulation & \texttt{packet\_encap.hpp} & Protocol \& ARQ \\
 \bottomrule
 \end{tabular}
 \caption{Curriculum mapping to engine blocks and UI panels.}
@@ -301,7 +407,6 @@ TCP/IP Encapsulation & \texttt{packet\_encap.hpp} & Protocol \& Access \\
 \section{Detailed Visual Tour \& Interactive Capabilities}
 
 The visual fidelity of \textit{commsim-studio} provides educators and students with intuitive physical-layer insights:
-
 \begin{enumerate}
     \item \textbf{Modulation Constellation (Figure~\ref{fig:constellations})}: By accumulating point-sprites over time with decay, clustering behavior and noise variance are instantly recognized. 16-QAM and 64-QAM clusters demonstrate the square grid decision boundaries and the impact of increasing constellation density.
     \item \textbf{Eye Diagram (Figure~\ref{fig:eye})}: The transition from an open eye (with matched RRC filtering $\beta=0.35$) to an obliterated eye (under multipath taps $[1.0, 0.5, 0.3]$) visually reinforces the Nyquist criterion for zero ISI and timing sensitivity.
