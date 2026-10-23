@@ -1,1 +1,7 @@
 build/
+build-tsan/
+*.aux
+*.log
+*.out
+imgui.ini
+settings.json

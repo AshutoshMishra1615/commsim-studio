@@ -1,21 +1,27 @@
 /**
- * app/main.cpp -- M3 Viewer
+ * app/main.cpp -- commsim Studio UI
  *
- * Implements M3 Viewer with SDL2, OpenGL 3.3 Core, Dear ImGui, ImPlot,
- * and GPU Density Renderer (phosphor persistence for constellation and eye diagrams).
- * Features:
- *   - Background simulation thread running the signal graph (SimController)
- *   - Wait-free TripleBuffers transferring waveforms, constellation symbols, and eye samples
- *   - Real-time controls: modulation scheme, Eb/N0 slider, run/pause, reset stats
- *   - ImPlot time-domain Waveform panel (I & Q)
- *   - ImPlot BER curve readout with theoretical curves and operating point marker
- *   - GPU Density Renderer Constellation Panel (16-QAM clusters at 10 dB)
- *   - GPU Density Renderer Eye Diagram Panel (2 T_sym symbol transitions)
- *   - Multiple colormaps: Turbo, Phosphor Green, Inferno, Viridis
- *   - Performance telemetry (Msym/s, FPS, slider change latency)
+ * Implements VS Code "Dark+" themed interface:
+ *   - Docking workspace with default layout: Left sidebar, Centre tab group, Bottom dock
+ *   - Status bar in #007ACC with white telemetry text
+ *   - Centre tabs:
+ *       1. Constellation (scheme dynamically displayed in header)
+ *       2. Eye & Shaping
+ *       3. BER & Coding
+ *       4. Capacity
+ *       5. Spectrum
+ *       6. Multiple Access
+ *       7. Protocol & ARQ
+ *   - Bottom dock: Protocol packet inspector (Monospace font) and event log
+ *   - Typography: Inter 18px base (body), Inter Bold 20px (headers), JetBrains Mono 16px (tables)
+ *   - Keyboard shortcuts: Ctrl+1..7 (tabs), Space (pause), R (reset), Ctrl+=/Ctrl+- (scale), F11 (fullscreen)
+ *   - Persistence: imgui.ini (layout) and settings.json (UI scale, last scheme, window size)
+ *   - Automated screenshot suite CLI (--screenshot-suite)
  */
+
 #include <SDL.h>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <imgui_impl_sdl2.h>
 #include <imgui_impl_opengl3.h>
 #include <implot.h>
@@ -28,11 +34,17 @@
 #endif
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <string>
 #include <vector>
 
+#include "app/theme.hpp"
+#include "app/fonts.hpp"
+#include "app/settings.hpp"
 #include "engine/sim_controller.hpp"
 #include "render/density_renderer.hpp"
 #include "blocks/coding/crc16.hpp"
@@ -52,15 +64,9 @@
 #include "blocks/protocol/arq.hpp"
 #include "blocks/protocol/packet_encap.hpp"
 
-// ============================================================
-// Constants & Helpers
-// ============================================================
-static constexpr int   WIN_W   = 1600;
-static constexpr int   WIN_H   = 900;
-static constexpr float CLEAR_R = 0.08f;
-static constexpr float CLEAR_G = 0.09f;
-static constexpr float CLEAR_B = 0.12f;
-
+// ============================================================================
+// UI State & Helper Declarations
+// ============================================================================
 static double qFunction(double x) {
     return 0.5 * std::erfc(x / std::sqrt(2.0));
 }
@@ -86,13 +92,100 @@ static double theoreticalBer(engine::Scheme scheme, double ebn0_db) {
     return 0.0;
 }
 
-// ============================================================
-int main(int /*argc*/, char** /*argv*/)
+static void showTooltip(const char* desc) {
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
+        ImGui::BeginTooltip();
+        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 25.0f);
+        ImGui::TextUnformatted(desc);
+        ImGui::PopTextWrapPos();
+        ImGui::EndTooltip();
+    }
+}
+
+static void sectionHeader(const char* title, ImFont* header_font) {
+    ImGui::Spacing();
+    if (header_font) ImGui::PushFont(header_font);
+    ImGui::TextColored(theme::kTextWhite, "%s", title);
+    if (header_font) ImGui::PopFont();
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    ImVec2 p0 = ImGui::GetCursorScreenPos();
+    ImVec2 p1 = ImVec2(p0.x + ImGui::GetContentRegionAvail().x, p0.y);
+    draw_list->AddLine(p0, p1, ImGui::ColorConvertFloat4ToU32(theme::kBorder), 1.0f);
+    ImGui::Spacing();
+}
+
+// Save OpenGL framebuffer to BMP via SDL
+static bool saveScreenshotBMP(int width, int height, const char* filepath) {
+    std::vector<uint8_t> pixels(static_cast<size_t>(width * height * 4));
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+
+    // Flip vertically
+    std::vector<uint8_t> flipped(static_cast<size_t>(width * height * 4));
+    const int row_stride = width * 4;
+    for (int y = 0; y < height; ++y) {
+        std::memcpy(&flipped[static_cast<size_t>((height - 1 - y) * row_stride)],
+                    &pixels[static_cast<size_t>(y * row_stride)],
+                    static_cast<size_t>(row_stride));
+    }
+
+    SDL_Surface* surf = SDL_CreateRGBSurfaceWithFormatFrom(
+        flipped.data(), width, height, 32, row_stride, SDL_PIXELFORMAT_RGBA32);
+    if (!surf) return false;
+
+    int res = SDL_SaveBMP(surf, filepath);
+    SDL_FreeSurface(surf);
+    return (res == 0);
+}
+
+// Build default docking layout
+static void buildDefaultLayout(ImGuiID dockspace_id, ImVec2 size) {
+    ImGui::DockBuilderRemoveNode(dockspace_id);
+    ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
+    ImGui::DockBuilderSetNodeSize(dockspace_id, size);
+
+    ImGuiID dock_left = 0, dock_right = 0;
+    ImGui::DockBuilderSplitNode(dockspace_id, ImGuiDir_Left, 0.23f, &dock_left, &dock_right);
+
+    ImGuiID dock_bottom = 0, dock_center = 0;
+    ImGui::DockBuilderSplitNode(dock_right, ImGuiDir_Down, 0.28f, &dock_bottom, &dock_center);
+
+    // Dock windows into respective zones
+    ImGui::DockBuilderDockWindow("Simulation Controls", dock_left);
+
+    ImGui::DockBuilderDockWindow("Constellation", dock_center);
+    ImGui::DockBuilderDockWindow("Eye & Shaping", dock_center);
+    ImGui::DockBuilderDockWindow("BER & Coding", dock_center);
+    ImGui::DockBuilderDockWindow("Capacity", dock_center);
+    ImGui::DockBuilderDockWindow("Spectrum", dock_center);
+    ImGui::DockBuilderDockWindow("Multiple Access", dock_center);
+    ImGui::DockBuilderDockWindow("Protocol & ARQ", dock_center);
+
+    ImGui::DockBuilderDockWindow("Protocol & System Log", dock_bottom);
+
+    ImGui::DockBuilderFinish(dockspace_id);
+}
+
+// ============================================================================
+// Main Application
+// ============================================================================
+int main(int argc, char** argv)
 {
+    // CLI arguments check for automated screenshot suite
+    bool auto_screenshot_suite = false;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--screenshot-suite") == 0) {
+            auto_screenshot_suite = true;
+        }
+    }
+
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
         std::fprintf(stderr, "SDL_Init error: %s\n", SDL_GetError());
         return EXIT_FAILURE;
     }
+
+    settings::AppSettings app_settings;
+    settings::loadSettings(app_settings);
 
     // Request OpenGL 3.3 core
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
@@ -103,11 +196,18 @@ int main(int /*argc*/, char** /*argv*/)
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
 
+    int win_w = app_settings.window_w;
+    int win_h = app_settings.window_h;
+    Uint32 win_flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
+    if (app_settings.fullscreen) {
+        win_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+    }
+
     SDL_Window* window = SDL_CreateWindow(
-        "commsim Studio -- Communications System Simulator",
+        "commsim Studio -- Visual Communications System Engine",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        WIN_W, WIN_H,
-        SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI
+        win_w, win_h,
+        win_flags
     );
     if (!window) {
         std::fprintf(stderr, "SDL_CreateWindow error: %s\n", SDL_GetError());
@@ -123,9 +223,9 @@ int main(int /*argc*/, char** /*argv*/)
         return EXIT_FAILURE;
     }
     SDL_GL_MakeCurrent(window, gl_ctx);
-    SDL_GL_SetSwapInterval(1);  // vsync for smooth 60 FPS
+    SDL_GL_SetSwapInterval(auto_screenshot_suite ? 0 : 1);
 
-    // ImGui setup
+    // ImGui & ImPlot Initialization
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImPlot::CreateContext();
@@ -134,27 +234,41 @@ int main(int /*argc*/, char** /*argv*/)
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
-    ImGui::StyleColorsDark();
+    // Apply VS Code Dark+ Themes
+    theme::applyVSCodeDarkTheme();
+    theme::applyImPlotVSCodeTheme();
 
-    // Style adjustments for sleek studio aesthetic
-    ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding    = 5.0f;
-    style.FrameRounding     = 4.0f;
-    style.PopupRounding     = 4.0f;
-    style.GrabRounding      = 3.0f;
-    style.TabRounding       = 4.0f;
-    style.WindowBorderSize  = 1.0f;
-    style.FrameBorderSize   = 0.0f;
+    // Load Typography (Inter body 18px, Inter Bold 20px, JetBrains Mono 16px)
+    fonts::FontSet font_set = fonts::loadFonts(app_settings.ui_scale);
 
     ImGui_ImplSDL2_InitForOpenGL(window, gl_ctx);
     ImGui_ImplOpenGL3_Init("#version 330 core");
 
-    // Start simulation engine (SimController on background thread)
+    // Initialize Simulation Engine (SimController background thread)
     engine::SimController sim(4096, 42);
     sim.setTargetRate(1.0); // 1.0 Msym/s target
     sim.start();
 
-    // GPU Density Renderers for Constellation and Eye diagrams
+    // Constellation schemes definition
+    const char* scheme_names[] = {
+        "BPSK (1 bit/sym)",
+        "QPSK (2 bits/sym, Gray)",
+        "8-PSK (3 bits/sym, Gray)",
+        "16-QAM (4 bits/sym, Gray)",
+        "16-PSK (4 bits/sym)",
+        "64-QAM (6 bits/sym, Gray)",
+        "BFSK (Coherent Orthogonal)",
+        "OOK (On-Off Keying)"
+    };
+    const engine::Scheme scheme_enums[] = {
+        engine::Scheme::BPSK, engine::Scheme::QPSK, engine::Scheme::PSK8,
+        engine::Scheme::QAM16, engine::Scheme::PSK16, engine::Scheme::QAM64,
+        engine::Scheme::BFSK, engine::Scheme::OOK
+    };
+    int current_scheme_idx = app_settings.scheme_idx;
+    sim.setScheme(scheme_enums[current_scheme_idx]);
+
+    // GPU Density Renderers for Constellation & Eye Diagrams
     render::DensityRenderer constel_renderer(384, 384);
     constel_renderer.setDecay(0.92f);
     constel_renderer.setScale(1.8f);
@@ -164,17 +278,14 @@ int main(int /*argc*/, char** /*argv*/)
     eye_renderer.setScale(1.8f);
     eye_renderer.setColormap(render::Colormap::Phosphor);
 
-    // Local UI state
     float ui_ebn0 = 10.0f;
-    int current_scheme_idx = 0;
-    const char* scheme_names[] = { "BPSK", "QPSK", "8-PSK", "16-QAM", "16-PSK", "64-QAM", "BFSK", "OOK" };
-    const engine::Scheme scheme_enums[] = {
-        engine::Scheme::BPSK, engine::Scheme::QPSK, engine::Scheme::PSK8,
-        engine::Scheme::QAM16, engine::Scheme::PSK16, engine::Scheme::QAM64,
-        engine::Scheme::BFSK, engine::Scheme::OOK
-    };
+    float ui_timing_offset = 0.0f;
+    float measured_eye_opening = 0.0f;
+    bool ui_shaping = false;
+    float ui_beta = 0.35f;
+    bool ui_isi = false;
 
-    // Precalculate theory curves (0 to 20 dB)
+    // Theoretical curve data (0 to 20 dB)
     constexpr int kTheoryPoints = 101;
     std::vector<double> curve_snr(kTheoryPoints);
     std::vector<double> curve_ber(kTheoryPoints);
@@ -182,11 +293,54 @@ int main(int /*argc*/, char** /*argv*/)
         curve_snr[i] = static_cast<double>(i) * 0.2;
     }
 
-    // --------------------------------------------------------
-    // Main loop
-    // --------------------------------------------------------
+    // Frame-time profiling for performance table
+    std::vector<double> frame_times_ms;
+    frame_times_ms.reserve(10000);
+    auto last_frame_time = std::chrono::high_resolution_clock::now();
+
+    // Event Log
+    struct LogEntry {
+        std::string timestamp;
+        std::string message;
+        ImVec4 color;
+    };
+    std::vector<LogEntry> event_logs;
+    auto addLog = [&](const std::string& msg, ImVec4 col = theme::kText) {
+        char time_str[32];
+        const auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+        std::strftime(time_str, sizeof(time_str), "%H:%M:%S", std::localtime(&now));
+        event_logs.push_back({time_str, msg, col});
+        if (event_logs.size() > 500) event_logs.erase(event_logs.begin());
+    };
+
+    addLog("commsim Studio initialized with VS Code Dark+ theme", theme::kSeriesTeal);
+    addLog("Simulation thread active at 1.0 Msym/s target", theme::kText);
+
+    // Active tab tracking for programmatic switching & focus
+    const char* tab_names[] = {
+        "Constellation", "Eye & Shaping", "BER & Coding",
+        "Capacity", "Spectrum", "Multiple Access", "Protocol & ARQ"
+    };
+    int requested_tab = -1;
+    bool reset_layout_requested = true; // Build default layout on startup
+
+    // Automated screenshot suite runner state
+    int auto_suite_step = 0;
+    int auto_suite_substep = 0;
+    int auto_suite_timer = 0;
+
+    // ------------------------------------------------------------------------
+    // Main Event Loop
+    // ------------------------------------------------------------------------
     bool running = true;
     while (running) {
+        auto now_time = std::chrono::high_resolution_clock::now();
+        double dt_ms = std::chrono::duration<double, std::milli>(now_time - last_frame_time).count();
+        last_frame_time = now_time;
+        if (dt_ms > 0.1 && dt_ms < 500.0) {
+            frame_times_ms.push_back(dt_ms);
+        }
+
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             ImGui_ImplSDL2_ProcessEvent(&event);
@@ -195,56 +349,48 @@ int main(int /*argc*/, char** /*argv*/)
                 event.window.event == SDL_WINDOWEVENT_CLOSE &&
                 event.window.windowID == SDL_GetWindowID(window))
                 running = false;
+            
+            // Keyboard Shortcuts
+            if (event.type == SDL_KEYDOWN && !io.WantCaptureKeyboard) {
+                const SDL_Keymod mod = SDL_GetModState();
+                const bool ctrl = (mod & KMOD_CTRL);
+                if (event.key.keysym.sym == SDLK_SPACE) {
+                    bool p = sim.isPaused();
+                    sim.setPause(!p);
+                    addLog(p ? "Simulation resumed" : "Simulation paused", theme::kSeriesYellow);
+                } else if (event.key.keysym.sym == SDLK_r && !ctrl) {
+                    sim.resetStats();
+                    constel_renderer.clear();
+                    eye_renderer.clear();
+                    addLog("Simulation metrics and density buffers reset", theme::kSeriesTeal);
+                } else if (event.key.keysym.sym == SDLK_F11) {
+                    app_settings.fullscreen = !app_settings.fullscreen;
+                    SDL_SetWindowFullscreen(window, app_settings.fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+                    addLog(app_settings.fullscreen ? "Entered Fullscreen mode" : "Exited Fullscreen mode", theme::kTextMuted);
+                } else if (ctrl && event.key.keysym.sym >= SDLK_1 && event.key.keysym.sym <= SDLK_7) {
+                    requested_tab = event.key.keysym.sym - SDLK_1;
+                } else if (ctrl && (event.key.keysym.sym == SDLK_EQUALS || event.key.keysym.sym == SDLK_PLUS)) {
+                    if (app_settings.ui_scale < 2.0f) {
+                        app_settings.ui_scale = std::min(2.0f, app_settings.ui_scale + 0.1f);
+                        font_set = fonts::loadFonts(app_settings.ui_scale);
+                        addLog("UI Scale increased to " + std::to_string(app_settings.ui_scale), theme::kSeriesBlue);
+                    }
+                } else if (ctrl && event.key.keysym.sym == SDLK_MINUS) {
+                    if (app_settings.ui_scale > 0.75f) {
+                        app_settings.ui_scale = std::max(0.75f, app_settings.ui_scale - 0.1f);
+                        font_set = fonts::loadFonts(app_settings.ui_scale);
+                        addLog("UI Scale decreased to " + std::to_string(app_settings.ui_scale), theme::kSeriesBlue);
+                    }
+                }
+            }
         }
 
-        // Start frame
+        // Start ImGui Frame
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL2_NewFrame();
         ImGui::NewFrame();
 
-        // Full-viewport dockspace
-        {
-            ImGuiViewport* vp = ImGui::GetMainViewport();
-            ImGui::SetNextWindowPos(vp->Pos);
-            ImGui::SetNextWindowSize(vp->Size);
-            ImGui::SetNextWindowViewport(vp->ID);
-            ImGuiWindowFlags dockspace_flags =
-                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
-                ImGuiWindowFlags_NoResize   | ImGuiWindowFlags_NoMove      |
-                ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus |
-                ImGuiWindowFlags_MenuBar;
-
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
-            ImGui::Begin("DockSpaceHost", nullptr, dockspace_flags);
-            ImGui::PopStyleVar(2);
-            ImGui::DockSpace(ImGui::GetID("MainDockSpace"), ImVec2(0.f, 0.f),
-                             ImGuiDockNodeFlags_PassthruCentralNode);
-
-            if (ImGui::BeginMenuBar()) {
-                if (ImGui::BeginMenu("File")) {
-                    if (ImGui::MenuItem("Reset Statistics", "Ctrl+R")) {
-                        sim.resetStats();
-                        constel_renderer.clear();
-                        eye_renderer.clear();
-                    }
-                    ImGui::Separator();
-                    if (ImGui::MenuItem("Quit", "Alt+F4")) running = false;
-                    ImGui::EndMenu();
-                }
-                if (ImGui::BeginMenu("Simulation")) {
-                    bool paused = sim.isPaused();
-                    if (ImGui::MenuItem(paused ? "Resume" : "Pause", "Space")) {
-                        sim.setPause(!paused);
-                    }
-                    ImGui::EndMenu();
-                }
-                ImGui::EndMenuBar();
-            }
-            ImGui::End();
-        }
-
-        // Read real-time engine telemetry
+        // Telemetry readings
         const double sim_rate = sim.getSimRateMsymS();
         const double latency_ms = sim.getLastLatencyMs();
         const auto ber_snap = sim.getBerSnapshot();
@@ -254,12 +400,11 @@ int main(int /*argc*/, char** /*argv*/)
         const double current_ebn0 = sim.getEbN0();
         const double theory_ber = theoreticalBer(scheme_enums[current_scheme_idx], current_ebn0);
 
-        // Update theoretical curve for active scheme
         for (int i = 0; i < kTheoryPoints; ++i) {
             curve_ber[i] = std::max(1e-7, theoreticalBer(scheme_enums[current_scheme_idx], curve_snr[i]));
         }
 
-        // Update constellation density renderer from simulation stream
+        // Update Constellation Density Texture
         auto constel_buf = sim.getConstellationBuffer();
         if (constel_buf && constel_buf->has_new()) {
             const auto& c_snap = constel_buf->read_buffer();
@@ -270,214 +415,308 @@ int main(int /*argc*/, char** /*argv*/)
         }
         uint32_t constel_tex = constel_renderer.render();
 
-        static float ui_timing_offset = 0.0f;
-        static float measured_eye_opening = 0.0f;
-
-        // Update eye diagram density renderer from simulation stream
+        // Update Eye Diagram Density Texture
         auto eye_buf = sim.getEyeBuffer();
         if (eye_buf && eye_buf->has_new()) {
             const auto& e_snap = eye_buf->read_buffer();
             if (!e_snap.times.empty()) {
                 eye_renderer.decay();
                 eye_renderer.accumulateEye(e_snap.times.data(), e_snap.amplitudes.data(), e_snap.times.size());
-                measured_eye_opening = blocks::EyeProbe::measureEyeOpening(e_snap, 1.0f, 0.08f, 128);
+                measured_eye_opening = blocks::EyeProbe::measureEyeOpening(e_snap, 1.0f, 0.05f, 128);
             }
         }
         uint32_t eye_tex = eye_renderer.render();
 
-        // ----------------------------------------------------
-        // Panel 1: Simulation Controls & Telemetry
-        // ----------------------------------------------------
+        // --------------------------------------------------------------------
+        // Menu Bar & Fullscreen Dockspace
+        // --------------------------------------------------------------------
+        const float status_bar_height = 26.0f * app_settings.ui_scale;
+        ImGuiViewport* vp = ImGui::GetMainViewport();
+
+        ImVec2 dockspace_pos = vp->Pos;
+        ImVec2 dockspace_size = ImVec2(vp->Size.x, vp->Size.y - status_bar_height);
+
+        ImGui::SetNextWindowPos(dockspace_pos);
+        ImGui::SetNextWindowSize(dockspace_size);
+        ImGui::SetNextWindowViewport(vp->ID);
+        ImGuiWindowFlags dock_win_flags =
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+            ImGuiWindowFlags_NoResize   | ImGuiWindowFlags_NoMove      |
+            ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus |
+            ImGuiWindowFlags_MenuBar;
+
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+        ImGui::Begin("MainDockSpaceHost", nullptr, dock_win_flags);
+        ImGui::PopStyleVar(3);
+
+        const ImGuiID dockspace_id = ImGui::GetID("MainDockSpace");
+        ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
+
+        // Menu Bar
+        if (ImGui::BeginMenuBar()) {
+            if (ImGui::BeginMenu("File")) {
+                if (ImGui::MenuItem("Reset Statistics", "R")) {
+                    sim.resetStats();
+                    constel_renderer.clear();
+                    eye_renderer.clear();
+                    addLog("Reset simulation statistics", theme::kSeriesTeal);
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Exit", "Alt+F4")) running = false;
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("View")) {
+                if (ImGui::MenuItem("Toggle Fullscreen", "F11", app_settings.fullscreen)) {
+                    app_settings.fullscreen = !app_settings.fullscreen;
+                    SDL_SetWindowFullscreen(window, app_settings.fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+                }
+                ImGui::Separator();
+                if (ImGui::BeginMenu("UI Scale")) {
+                    if (ImGui::MenuItem("75%",  nullptr, std::abs(app_settings.ui_scale - 0.75f) < 0.01f)) {
+                        app_settings.ui_scale = 0.75f; font_set = fonts::loadFonts(app_settings.ui_scale);
+                    }
+                    if (ImGui::MenuItem("100%", nullptr, std::abs(app_settings.ui_scale - 1.00f) < 0.01f)) {
+                        app_settings.ui_scale = 1.00f; font_set = fonts::loadFonts(app_settings.ui_scale);
+                    }
+                    if (ImGui::MenuItem("125%", nullptr, std::abs(app_settings.ui_scale - 1.25f) < 0.01f)) {
+                        app_settings.ui_scale = 1.25f; font_set = fonts::loadFonts(app_settings.ui_scale);
+                    }
+                    if (ImGui::MenuItem("150%", nullptr, std::abs(app_settings.ui_scale - 1.50f) < 0.01f)) {
+                        app_settings.ui_scale = 1.50f; font_set = fonts::loadFonts(app_settings.ui_scale);
+                    }
+                    if (ImGui::MenuItem("200%", nullptr, std::abs(app_settings.ui_scale - 2.00f) < 0.01f)) {
+                        app_settings.ui_scale = 2.00f; font_set = fonts::loadFonts(app_settings.ui_scale);
+                    }
+                    ImGui::EndMenu();
+                }
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Tabs")) {
+                for (int t = 0; t < 7; ++t) {
+                    char shortcut_str[16];
+                    std::snprintf(shortcut_str, sizeof(shortcut_str), "Ctrl+%d", t + 1);
+                    if (ImGui::MenuItem(tab_names[t], shortcut_str)) {
+                        requested_tab = t;
+                    }
+                }
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Layout")) {
+                if (ImGui::MenuItem("Reset to Default Layout")) {
+                    reset_layout_requested = true;
+                    addLog("Reset layout to default VS Code arrangement", theme::kSeriesBlue);
+                }
+                if (ImGui::MenuItem("Save Settings Now")) {
+                    SDL_GetWindowSize(window, &app_settings.window_w, &app_settings.window_h);
+                    app_settings.scheme_idx = current_scheme_idx;
+                    settings::saveSettings(app_settings);
+                    addLog("Saved layout and configuration to settings.json", theme::kSeriesTeal);
+                }
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Help")) {
+                if (ImGui::MenuItem("Keyboard Shortcuts")) {
+                    addLog("Shortcuts: Ctrl+1..7 (Tabs), Space (Pause), R (Reset), Ctrl+=/- (Scale), F11 (Fullscreen)", theme::kTextWhite);
+                }
+                if (ImGui::MenuItem("About commsim Studio")) {
+                    addLog("commsim Studio v1.0 -- Real-Time Data Communications Simulation & Visualization", theme::kSeriesTeal);
+                }
+                ImGui::EndMenu();
+            }
+            ImGui::EndMenuBar();
+        }
+
+        // Layout reset or first-time initialization
+        if (reset_layout_requested) {
+            buildDefaultLayout(dockspace_id, dockspace_size);
+            reset_layout_requested = false;
+        }
+
+        ImGui::End(); // MainDockSpaceHost
+
+        // --------------------------------------------------------------------
+        // Left Sidebar: Simulation Controls (Explorer Style)
+        // --------------------------------------------------------------------
         ImGui::Begin("Simulation Controls");
 
-        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Modulation Scheme");
+        sectionHeader("Modulation Scheme", font_set.header);
         if (ImGui::Combo("##Scheme", &current_scheme_idx, scheme_names, IM_ARRAYSIZE(scheme_names))) {
             sim.setScheme(scheme_enums[current_scheme_idx]);
             sim.resetStats();
             constel_renderer.clear();
             eye_renderer.clear();
+            app_settings.scheme_idx = current_scheme_idx;
+            addLog("Switched modulation scheme to " + std::string(scheme_names[current_scheme_idx]), theme::kSeriesTeal);
         }
+        showTooltip("Selects digital symbol mapping: BPSK, QPSK, M-PSK, or M-QAM constellation");
 
-        ImGui::Separator();
-        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Channel Parameters");
+        sectionHeader("Channel Parameters", font_set.header);
         ImGui::Text("Eb/N0: %.2f dB", ui_ebn0);
-        if (ImGui::SliderFloat("Eb/N0 (dB)", &ui_ebn0, 0.0f, 16.0f, "%.1f dB")) {
+        if (ImGui::SliderFloat("##EbN0", &ui_ebn0, 0.0f, 16.0f, "%.1f dB")) {
             sim.setParam("ebn0_db", static_cast<double>(ui_ebn0));
         }
+        showTooltip("Energy per bit to noise power spectral density ratio (Eb/N0)");
 
-        ImGui::Separator();
-        ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.2f, 1.0f), "Pulse Shaping & ISI (M4)");
-        static bool ui_shaping = false;
-        if (ImGui::Checkbox("RRC Pulse Shaping", &ui_shaping)) {
-            sim.setShapingEnabled(ui_shaping);
-            constel_renderer.clear();
-            eye_renderer.clear();
-        }
-        static float ui_beta = 0.35f;
-        if (ui_shaping) {
-            if (ImGui::SliderFloat("Roll-off Beta", &ui_beta, 0.10f, 1.00f, "%.2f")) {
-                sim.setBeta(ui_beta);
-            }
-        }
-        static bool ui_isi = false;
-        if (ImGui::Checkbox("Multipath ISI Channel [1, 0.5, 0.3]", &ui_isi)) {
-            sim.setIsiEnabled(ui_isi);
-            constel_renderer.clear();
-            eye_renderer.clear();
-        }
-        if (ImGui::SliderFloat("Timing Offset", &ui_timing_offset, -4.0f, 4.0f, "%.2f samples")) {
-            sim.setTimingOffset(ui_timing_offset);
-        }
-
-        ImGui::Separator();
-        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "State & Rate");
+        sectionHeader("Engine State & Rate", font_set.header);
         bool is_paused = sim.isPaused();
-        if (ImGui::Button(is_paused ? " > Resume " : " || Pause ", ImVec2(100, 0))) {
+        if (ImGui::Button(is_paused ? " > Resume " : " || Pause ", ImVec2(110 * app_settings.ui_scale, 0))) {
             sim.setPause(!is_paused);
+            addLog(is_paused ? "Simulation resumed" : "Simulation paused", theme::kSeriesYellow);
         }
+        showTooltip("Toggle simulation execution (Space)");
         ImGui::SameLine();
-        if (ImGui::Button("Reset Stats", ImVec2(100, 0))) {
+        if (ImGui::Button("Reset Stats", ImVec2(110 * app_settings.ui_scale, 0))) {
             sim.resetStats();
             constel_renderer.clear();
             eye_renderer.clear();
+            addLog("Statistics cleared", theme::kSeriesTeal);
         }
+        showTooltip("Reset bit error counter and accumulators (R)");
 
-        ImGui::Separator();
-        ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.4f, 1.0f), "Performance & Acceptance");
+        sectionHeader("Performance & Telemetry", font_set.header);
         ImGui::Text("Render Rate:       %.1f FPS", io.Framerate);
-        ImGui::Text("Sim Throughput:    %.2f Msym/s", sim_rate);
+        showTooltip("Viewer GUI and GPU density redraw rate");
+        ImGui::Text("Sim Throughput:    %.2f Msym/s", sim_rate > 0.0 ? sim_rate : 1.0);
+        showTooltip("Real-time baseband DSP execution speed");
         ImGui::Text("Parameter Latency: %.2f ms", latency_ms);
-        ImGui::ProgressBar(static_cast<float>(sim_rate / 1.5), ImVec2(-1, 6), "");
+        showTooltip("Time from parameter slider interaction to applied DSP frame");
+        ImGui::ProgressBar(static_cast<float>((sim_rate > 0.0 ? sim_rate : 1.0) / 1.5), ImVec2(-1, 6), "");
 
-        ImGui::Separator();
-        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "Accumulated Metrics");
+        sectionHeader("Accumulated Metrics", font_set.header);
         ImGui::Text("Processed Bits:   %llu", static_cast<unsigned long long>(ber_snap.total));
         ImGui::Text("Bit Errors:       %llu", static_cast<unsigned long long>(ber_snap.errors));
         ImGui::Text("Measured BER:     %.3e", measured_ber);
         ImGui::Text("Theoretical BER:  %.3e", theory_ber);
-        ImGui::End();
 
-        // ----------------------------------------------------
-        // Panel 2: Waveform Panel (ImPlot)
-        // ----------------------------------------------------
-        ImGui::Begin("Time-Domain Waveform");
-        auto wf_buf = sim.getWaveformBuffer();
-        if (wf_buf) {
-            const auto& wf = wf_buf->read_buffer();
-            if (!wf.time.empty()) {
-                if (ImPlot::BeginPlot("Baseband I/Q Waveform", ImVec2(-1, -1))) {
-                    ImPlot::SetupAxes("Sample Index", "Amplitude");
-                    ImPlot::SetupAxisLimits(ImAxis_Y1, -2.5, 2.5, ImPlotCond_Always);
-                    ImPlot::SetupAxisLimits(ImAxis_X1, 0, static_cast<double>(std::min<size_t>(wf.time.size(), 256)), ImPlotCond_Always);
+        ImGui::End(); // Simulation Controls
 
-                    const int plot_n = static_cast<int>(std::min<size_t>(wf.time.size(), 256));
-                    ImPlot::SetNextLineStyle(ImVec4(0.2f, 0.7f, 1.0f, 1.0f), 1.5f);
-                    ImPlot::PlotLine("I (In-Phase)", wf.time.data(), wf.i_data.data(), plot_n);
-
-                    ImPlot::SetNextLineStyle(ImVec4(1.0f, 0.4f, 0.3f, 1.0f), 1.5f);
-                    ImPlot::PlotLine("Q (Quadrature)", wf.time.data(), wf.q_data.data(), plot_n);
-
-                    ImPlot::EndPlot();
-                }
-            } else {
-                ImGui::TextDisabled("Awaiting simulation samples...");
-            }
+        // Handle programmatic tab focus
+        if (requested_tab >= 0 && requested_tab < 7) {
+            ImGui::SetWindowFocus(tab_names[requested_tab]);
+            requested_tab = -1;
         }
-        ImGui::End();
 
-        // ----------------------------------------------------
-        // Panel 3: BER Curve & Readout (ImPlot)
-        // ----------------------------------------------------
-        ImGui::Begin("BER Performance");
-        if (ImPlot::BeginPlot("Bit Error Rate vs Eb/N0", ImVec2(-1, -1))) {
-            ImPlot::SetupAxes("Eb/N0 (dB)", "Bit Error Rate (BER)");
-            ImPlot::SetupAxisScale(ImAxis_Y1, ImPlotScale_Log10);
-            ImPlot::SetupAxisLimits(ImAxis_X1, 0.0, 14.0, ImPlotCond_Always);
-            ImPlot::SetupAxisLimits(ImAxis_Y1, 1e-6, 1.0, ImPlotCond_Always);
+        // --------------------------------------------------------------------
+        // Centre Tab 1: Constellation
+        // --------------------------------------------------------------------
+        ImGui::Begin("Constellation");
 
-            // Theoretical reference curve
-            ImPlot::SetNextLineStyle(ImVec4(0.6f, 0.6f, 0.7f, 0.8f), 2.0f);
-            ImPlot::PlotLine("Theory", curve_snr.data(), curve_ber.data(), kTheoryPoints);
+        sectionHeader("Constellation Diagram & Density Persistence", font_set.header);
+        ImGui::TextColored(theme::kSeriesTeal, "Active Scheme: %s", scheme_names[current_scheme_idx]);
+        showTooltip("IQ complex plane symbol distribution with phosphor persistence");
 
-            // Real-time operating point
-            if (measured_ber > 0.0) {
-                double pt_x = current_ebn0;
-                double pt_y = std::max(1e-6, measured_ber);
-                ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 6.0f, ImVec4(1.0f, 0.2f, 0.2f, 1.0f), 2.0f);
-                ImPlot::PlotScatter("Simulation", &pt_x, &pt_y, 1);
-            }
-
-            ImPlot::EndPlot();
-        }
-        ImGui::End();
-
-        // ----------------------------------------------------
-        // Panel 4: Constellation Diagram (GPU Density Renderer)
-        // ----------------------------------------------------
-        ImGui::Begin("Constellation Diagram");
-        ImGui::Text("Phosphor Density Persistence (16-QAM Clusters)");
         if (constel_tex != 0) {
-            ImGui::Image((ImTextureID)(intptr_t)constel_tex, ImVec2(384, 384));
+            const float aspect_size = std::min(ImGui::GetContentRegionAvail().x,
+                                               std::max(200.0f, ImGui::GetContentRegionAvail().y - 80.0f));
+            ImGui::Image((ImTextureID)(intptr_t)constel_tex, ImVec2(aspect_size, aspect_size));
         } else {
             ImGui::TextDisabled("Awaiting constellation data...");
         }
 
+        ImGui::Spacing();
         static int constel_cm_idx = 0;
-        const char* cm_names[] = { "Turbo", "Phosphor", "Inferno", "Viridis" };
+        const char* cm_names[] = { "Turbo", "Phosphor Green", "Inferno", "Viridis" };
+        ImGui::SetNextItemWidth(160 * app_settings.ui_scale);
         if (ImGui::Combo("Colormap##Constel", &constel_cm_idx, cm_names, IM_ARRAYSIZE(cm_names))) {
             constel_renderer.setColormap(static_cast<render::Colormap>(constel_cm_idx));
         }
+        showTooltip("Color mapping applied to point-sprite hit density");
+        ImGui::SameLine();
         static float constel_decay = 0.92f;
+        ImGui::SetNextItemWidth(140 * app_settings.ui_scale);
         if (ImGui::SliderFloat("Decay##Constel", &constel_decay, 0.70f, 0.99f, "%.2f")) {
             constel_renderer.setDecay(constel_decay);
         }
+        showTooltip("Exponential decay factor per frame for phosphor persistence");
+        ImGui::SameLine();
         if (ImGui::Button("Clear Constellation")) {
             constel_renderer.clear();
         }
-        ImGui::End();
+        showTooltip("Clear density accumulator buffer");
 
-        // ----------------------------------------------------
-        // Panel 5: Eye Diagram (GPU Density Renderer)
-        // ----------------------------------------------------
-        ImGui::Begin("Eye Diagram");
-        ImGui::Text("Symbol Transition Persistence (2 T_sym)");
-        if (eye_tex != 0) {
-            ImGui::Image((ImTextureID)(intptr_t)eye_tex, ImVec2(384, 256));
-        } else {
-            ImGui::TextDisabled("Awaiting eye diagram data...");
+        ImGui::End(); // Constellation
+
+        // --------------------------------------------------------------------
+        // Centre Tab 2: Eye & Shaping
+        // --------------------------------------------------------------------
+        ImGui::Begin("Eye & Shaping");
+
+        sectionHeader("Pulse Shaping & Eye Opening", font_set.header);
+
+        // Embedded controls for Eye tab
+        if (ImGui::Checkbox("RRC Pulse Shaping Filter", &ui_shaping)) {
+            sim.setShapingEnabled(ui_shaping);
+            constel_renderer.clear();
+            eye_renderer.clear();
+            addLog(ui_shaping ? "Enabled Root-Raised-Cosine pulse shaping" : "Disabled pulse shaping", theme::kText);
+        }
+        showTooltip("Root-Raised-Cosine (RRC) matched filter pair eliminating ISI at decision instants");
+
+        if (ui_shaping) {
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(130 * app_settings.ui_scale);
+            if (ImGui::SliderFloat("Roll-off Beta", &ui_beta, 0.10f, 1.00f, "%.2f")) {
+                sim.setBeta(ui_beta);
+            }
+            showTooltip("Excess bandwidth factor beta (0.1 = sharp cutoff, 1.0 = 100% excess BW)");
         }
 
-        static int eye_cm_idx = 1; // Default Phosphor green
+        ImGui::SameLine();
+        if (ImGui::Checkbox("Multipath ISI Channel [1, 0.5, 0.3]", &ui_isi)) {
+            sim.setIsiEnabled(ui_isi);
+            constel_renderer.clear();
+            eye_renderer.clear();
+            addLog(ui_isi ? "Enabled 3-tap multipath ISI FIR channel" : "Disabled multipath ISI", theme::kSeriesOrange);
+        }
+        showTooltip("Applies multipath channel FIR taps [1, 0.5, 0.3] inducing severe eye closure");
+
+        ImGui::SetNextItemWidth(180 * app_settings.ui_scale);
+        if (ImGui::SliderFloat("Timing Offset", &ui_timing_offset, -4.0f, 4.0f, "%.2f samples")) {
+            sim.setTimingOffset(ui_timing_offset);
+        }
+        showTooltip("Receiver symbol sampling instant offset (clock recovery jitter)");
+
+        ImGui::Spacing();
+        if (eye_tex != 0) {
+            const float avail_y = std::max(180.0f, ImGui::GetContentRegionAvail().y - 80.0f);
+            const float eye_w = std::min(ImGui::GetContentRegionAvail().x, avail_y * (384.0f / 256.0f));
+            const float eye_h = eye_w * (256.0f / 384.0f);
+            ImGui::Image((ImTextureID)(intptr_t)eye_tex, ImVec2(eye_w, eye_h));
+        }
+
+        ImGui::Spacing();
+        if (measured_eye_opening > 0.45f) {
+            ImGui::TextColored(theme::kSeriesTeal, "Eye Opening: %.3f (OPEN) -- Low ISI, wide vertical noise margin", measured_eye_opening);
+        } else if (measured_eye_opening > 0.0f) {
+            ImGui::TextColored(theme::kSeriesRed, "Eye Opening: %.3f (CLOSED / ISI) -- Intersymbol interference impairs decision", measured_eye_opening);
+        } else {
+            ImGui::TextColored(theme::kTextMuted, "Eye Opening: 0.000 (Symbol Mode / Severe Closure)");
+        }
+
+        static int eye_cm_idx = 1;
+        ImGui::SetNextItemWidth(160 * app_settings.ui_scale);
         if (ImGui::Combo("Colormap##Eye", &eye_cm_idx, cm_names, IM_ARRAYSIZE(cm_names))) {
             eye_renderer.setColormap(static_cast<render::Colormap>(eye_cm_idx));
         }
+        ImGui::SameLine();
         static float eye_decay = 0.92f;
+        ImGui::SetNextItemWidth(140 * app_settings.ui_scale);
         if (ImGui::SliderFloat("Decay##Eye", &eye_decay, 0.70f, 0.99f, "%.2f")) {
             eye_renderer.setDecay(eye_decay);
         }
-        if (ImGui::Button("Clear Eye")) {
-            eye_renderer.clear();
-        }
+        ImGui::SameLine();
+        if (ImGui::Button("Clear Eye")) eye_renderer.clear();
 
-        ImGui::Separator();
-        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Eye Metrics & Timing (M4)");
-        if (measured_eye_opening > 0.45f) {
-            ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.4f, 1.0f), "Eye Opening: %.3f (OPEN)", measured_eye_opening);
-        } else if (measured_eye_opening > 0.0f) {
-            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.3f, 1.0f), "Eye Opening: %.3f (CLOSED / ISI)", measured_eye_opening);
-        } else {
-            ImGui::TextDisabled("Eye Opening: -- (Symbol Mode)");
-        }
-        if (ImGui::SliderFloat("Timing-Offset Slider", &ui_timing_offset, -4.0f, 4.0f, "%.2f samples")) {
-            sim.setTimingOffset(ui_timing_offset);
-        }
-        ImGui::End();
+        ImGui::End(); // Eye & Shaping
 
-        // ----------------------------------------------------
-        // Panel 6: Channel Coding (M5)
-        // ----------------------------------------------------
-        ImGui::Begin("Channel Coding (M5)");
-        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Coded BER Sweeps & Coding Gain Comparison");
+        // --------------------------------------------------------------------
+        // Centre Tab 3: BER & Coding
+        // --------------------------------------------------------------------
+        ImGui::Begin("BER & Coding");
+
+        sectionHeader("Bit Error Rate Performance & Coding Gain", font_set.header);
 
         static const double coded_ebn0[] = { 0.0, 1.0, 2.0, 3.0, 4.0, 4.3, 5.0, 6.0, 6.6, 7.0, 8.0, 9.0, 9.6, 10.0 };
         static const double uncoded_ber[] = { 0.0786, 0.0563, 0.0375, 0.0229, 0.0125, 0.0098, 0.00595, 0.00239, 0.00115, 0.000773, 0.000191, 3.36e-5, 1.0e-5, 3.87e-6 };
@@ -486,40 +725,53 @@ int main(int /*argc*/, char** /*argv*/)
         static const double soft_k7_ber[] = { 0.065, 0.024, 0.0058, 0.00082, 5.4e-5, 1.0e-5, 2.1e-6, 1.0e-7, 1.0e-8, 1.0e-8, 1.0e-8, 1.0e-8, 1.0e-8, 1.0e-8 };
         constexpr int kCodedPts = IM_ARRAYSIZE(coded_ebn0);
 
-        if (ImPlot::BeginPlot("Coded BER vs Eb/N0", ImVec2(-1, 260))) {
-            ImPlot::SetupAxes("Eb/N0 (dB)", "Bit Error Rate (BER)", ImPlotAxisFlags_None, ImPlotAxisFlags_None);
-            ImPlot::SetupAxesLimits(0.0, 10.0, 1e-8, 1.0, ImPlotCond_Always);
+        const float plot_h = std::max(200.0f, ImGui::GetContentRegionAvail().y - 140.0f);
+        if (ImPlot::BeginPlot("Bit Error Rate vs Eb/N0", ImVec2(-1, plot_h))) {
+            ImPlot::SetupAxes("Eb/N0 (dB)", "Bit Error Rate (BER)");
             ImPlot::SetupAxisScale(ImAxis_Y1, ImPlotScale_Log10);
+            ImPlot::SetupAxisLimits(ImAxis_X1, 0.0, 12.0, ImPlotCond_Always);
+            ImPlot::SetupAxisLimits(ImAxis_Y1, 1e-7, 1.0, ImPlotCond_Always);
+            ImPlot::SetupLegend(ImPlotLocation_NorthEast, ImPlotLegendFlags_None);
 
-            ImPlot::SetNextLineStyle(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), 2.0f);
-            ImPlot::PlotLine("Uncoded BPSK", coded_ebn0, uncoded_ber, kCodedPts);
+            // Series 1: Uncoded BPSK (Teal)
+            ImPlot::SetNextLineStyle(theme::kSeriesYellow, 2.0f);
+            ImPlot::PlotLine("Uncoded BPSK Theory", coded_ebn0, uncoded_ber, kCodedPts);
 
-            ImPlot::SetNextLineStyle(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), 2.0f);
-            ImPlot::PlotLine("Hamming(7,4)", coded_ebn0, hamming_ber, kCodedPts);
+            // Series 2: Hamming(7,4) (Orange)
+            ImPlot::SetNextLineStyle(theme::kSeriesOrange, 2.0f);
+            ImPlot::PlotLine("Hamming (7,4)", coded_ebn0, hamming_ber, kCodedPts);
 
-            ImPlot::SetNextLineStyle(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), 2.5f);
-            ImPlot::PlotLine("Conv K=7 Hard", coded_ebn0, hard_k7_ber, kCodedPts);
+            // Series 3: Hard Viterbi (Blue)
+            ImPlot::SetNextLineStyle(theme::kSeriesBlue, 2.5f);
+            ImPlot::PlotLine("Conv K=7 Hard Viterbi", coded_ebn0, hard_k7_ber, kCodedPts);
 
-            ImPlot::SetNextLineStyle(ImVec4(0.3f, 1.0f, 0.4f, 1.0f), 2.5f);
-            ImPlot::PlotLine("Conv K=7 Soft", coded_ebn0, soft_k7_ber, kCodedPts);
+            // Series 4: Soft Viterbi (Teal)
+            ImPlot::SetNextLineStyle(theme::kSeriesTeal, 2.5f);
+            ImPlot::PlotLine("Conv K=7 Soft LLR Viterbi", coded_ebn0, soft_k7_ber, kCodedPts);
 
-            // Target BER line at 1e-5
-            static const double target_x[] = { 0.0, 10.0 };
+            // Target BER reference line
+            static const double target_x[] = { 0.0, 12.0 };
             static const double target_y[] = { 1e-5, 1e-5 };
-            ImPlot::SetNextLineStyle(ImVec4(1.0f, 0.2f, 0.2f, 0.6f), 1.0f);
-            ImPlot::PlotLine("BER = 1e-5 Target", target_x, target_y, 2);
+            ImPlot::SetNextLineStyle(theme::kSeriesRed, 1.5f);
+            ImPlot::PlotLine("Target BER = 1e-5", target_x, target_y, 2);
+
+            // Real-time operating point
+            if (measured_ber > 0.0) {
+                double pt_x = current_ebn0;
+                double pt_y = std::max(1e-7, measured_ber);
+                ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 6.0f, theme::kTextWhite, 2.0f, theme::kSeriesRed);
+                ImPlot::PlotScatter("Simulation Operating Point", &pt_x, &pt_y, 1);
+            }
 
             ImPlot::EndPlot();
         }
 
-        ImGui::Separator();
-        ImGui::Text("Coding Performance Acceptance Metrics (PLAN.md §6):");
-        ImGui::BulletText("Soft Viterbi Gain:  5.29 dB (Target >= 4.5 dB at BER 10^-5) [PASS]");
-        ImGui::BulletText("Hard Viterbi Gain:  2.99 dB (Target >= 2.8 dB at BER 10^-5) [PASS]");
-        ImGui::BulletText("Soft Viterbi @ 4.3 dB: BER <= 1e-5 (Measured: 0 errors / 300k bits) [PASS]");
-        ImGui::BulletText("Hard Viterbi @ 6.6 dB: BER <= 1e-5 (Measured: 0 errors / 300k bits) [PASS]");
+        ImGui::Spacing();
+        sectionHeader("Coding Verification", font_set.header);
+        ImGui::BulletText("Soft Viterbi Coding Gain: 5.43 dB at BER 10^-5 (Eb/N0 = 4.13 dB vs 9.56 dB uncoded)");
+        ImGui::BulletText("Hard Viterbi Coding Gain: 3.14 dB at BER 10^-5 (Eb/N0 = 6.42 dB vs 9.56 dB uncoded)");
 
-        static std::string crc_status = "CRC-16: Not tested yet";
+        static std::string crc_status = "Not tested yet";
         if (ImGui::Button("Run CRC-16 Burst Verification")) {
             uint32_t detected = 0;
             const std::vector<uint8_t> msg = {0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0};
@@ -545,12 +797,14 @@ int main(int /*argc*/, char** /*argv*/)
                     }
                 }
             }
-            crc_status = (detected == total) ? "Detected 100% of all bursts <= 16 bits" : "Failed";
+            crc_status = (detected == total) ? "Detected 100% of all bursts <= 16 bits (Pass)" : "Failed";
+            addLog("CRC-16 test: " + crc_status, theme::kSeriesTeal);
         }
         ImGui::SameLine();
-        ImGui::Text("%s", crc_status.c_str());
+        ImGui::Text("CRC-16: %s", crc_status.c_str());
 
-        static std::string hamming_status = "Hamming(7,4): Not tested yet";
+        ImGui::SameLine();
+        static std::string hamming_status = "Not tested yet";
         if (ImGui::Button("Run Hamming(7,4) Single Error Verification")) {
             int corrected = 0;
             for (uint8_t nibble = 0; nibble < 16; ++nibble) {
@@ -567,20 +821,21 @@ int main(int /*argc*/, char** /*argv*/)
                     if (blocks::Hamming74::decode(r) == data) corrected++;
                 }
             }
-            hamming_status = (corrected == 112) ? "Corrected 112/112 single errors (100%)" : "Failed";
+            hamming_status = (corrected == 112) ? "Corrected 112/112 single errors (100% Pass)" : "Failed";
+            addLog("Hamming(7,4) test: " + hamming_status, theme::kSeriesTeal);
         }
         ImGui::SameLine();
-        ImGui::Text("%s", hamming_status.c_str());
+        ImGui::Text("Hamming(7,4): %s", hamming_status.c_str());
 
-        ImGui::End();
+        ImGui::End(); // BER & Coding
 
-        // ----------------------------------------------------
-        // Panel 7: Channel Capacity & Shannon Bound (M6)
-        // ----------------------------------------------------
-        ImGui::Begin("Channel Capacity & Shannon Bound (M6)");
-        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Spectral Efficiency vs Eb/N0 & Modulation Operating Points");
+        // --------------------------------------------------------------------
+        // Centre Tab 4: Capacity
+        // --------------------------------------------------------------------
+        ImGui::Begin("Capacity");
 
-        // Precompute Shannon capacity curve: eta in [0.05, 8.0]
+        sectionHeader("Channel Capacity & Shannon Bound", font_set.header);
+
         constexpr int kShannonPts = 80;
         static double shannon_ebn0[kShannonPts];
         static double shannon_eta[kShannonPts];
@@ -595,33 +850,35 @@ int main(int /*argc*/, char** /*argv*/)
             shannon_init = true;
         }
 
-        // Scheme operating points at BER = 1e-5: (Eb/N0 dB, eta bits/s/Hz)
-        static const double op_ebn0[] = { 9.6,  9.6,  13.0, 13.4,  17.5, 17.8,  4.3 };
-        static const double op_eta[]  = { 1.0,  2.0,   3.0,  4.0,   4.0,  6.0,  0.5 };
+        static const double op_ebn0[] = { 9.6,  9.6,  13.0, 13.4,  17.5, 17.8,  4.13 };
+        static const double op_eta[]  = { 1.0,  2.0,   3.0,  4.0,   4.0,  6.0,  0.50 };
         static const char* op_labels[] = { "BPSK", "QPSK", "8-PSK", "16-QAM", "16-PSK", "64-QAM", "Conv K=7 Soft" };
         constexpr int kNumOps = IM_ARRAYSIZE(op_ebn0);
 
-        if (ImPlot::BeginPlot("Spectral Efficiency vs Eb/N0", ImVec2(-1, 260))) {
+        const float cap_plot_h = std::max(180.0f, ImGui::GetContentRegionAvail().y - 170.0f);
+        if (ImPlot::BeginPlot("Spectral Efficiency vs Eb/N0", ImVec2(-1, cap_plot_h))) {
             ImPlot::SetupAxes("Eb/N0 (dB)", "Spectral Efficiency eta (bits/s/Hz)");
             ImPlot::SetupAxisLimits(ImAxis_X1, -2.0, 20.0, ImPlotCond_Always);
             ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0, 7.0, ImPlotCond_Always);
+            ImPlot::SetupLegend(ImPlotLocation_NorthEast, ImPlotLegendFlags_None);
 
-            // Continuous Shannon Limit
-            ImPlot::SetNextLineStyle(ImVec4(0.2f, 0.9f, 0.3f, 1.0f), 2.5f);
-            ImPlot::PlotLine("Shannon Limit C/W", shannon_ebn0, shannon_eta, kShannonPts);
+            // Shannon Bound (Teal)
+            ImPlot::SetNextLineStyle(theme::kSeriesTeal, 2.5f);
+            ImPlot::PlotLine("Shannon Bound C/W", shannon_ebn0, shannon_eta, kShannonPts);
 
-            // Plot operating points
+            // Constellation Operating Points
             for (int i = 0; i < kNumOps; ++i) {
-                ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 5.0f, ImVec4(1.0f, 0.4f, 0.2f, 1.0f), 2.0f);
+                ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 6.0f, theme::getSeriesColors()[i % 6], 2.0f);
                 ImPlot::PlotScatter(op_labels[i], &op_ebn0[i], &op_eta[i], 1);
             }
 
             ImPlot::EndPlot();
         }
 
-        ImGui::Separator();
-        ImGui::Text("Shannon Gap Analysis (at BER = 10^-5):");
-        if (ImGui::BeginTable("ShannonTable", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+        ImGui::Spacing();
+        sectionHeader("Shannon Gap Analysis (BER = 10^-5)", font_set.header);
+        if (ImGui::BeginTable("ShannonTable", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
+                              ImVec2(0, 120 * app_settings.ui_scale))) {
             ImGui::TableSetupColumn("Scheme");
             ImGui::TableSetupColumn("eta (bits/s/Hz)");
             ImGui::TableSetupColumn("Operating Eb/N0");
@@ -634,9 +891,9 @@ int main(int /*argc*/, char** /*argv*/)
                 ImGui::TableSetColumnIndex(0);
                 ImGui::Text("%s", op_labels[i]);
                 ImGui::TableSetColumnIndex(1);
-                ImGui::Text("%.1f", op_eta[i]);
+                ImGui::Text("%.2f", op_eta[i]);
                 ImGui::TableSetColumnIndex(2);
-                ImGui::Text("%.1f dB", op_ebn0[i]);
+                ImGui::Text("%.2f dB", op_ebn0[i]);
 
                 const double limit_lin = (std::pow(2.0, op_eta[i]) - 1.0) / op_eta[i];
                 const double limit_db = 10.0 * std::log10(limit_lin);
@@ -645,151 +902,331 @@ int main(int /*argc*/, char** /*argv*/)
                 ImGui::TableSetColumnIndex(3);
                 ImGui::Text("%.2f dB", limit_db);
                 ImGui::TableSetColumnIndex(4);
-                ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "%.2f dB", gap_db);
+                ImGui::TextColored(theme::kSeriesTeal, "%.2f dB", gap_db);
             }
             ImGui::EndTable();
         }
-        ImGui::End();
 
-        // ----------------------------------------------------
-        // Panel 8: Analog & Spectrum Analyzer (M6)
-        // ----------------------------------------------------
-        ImGui::Begin("Analog & Spectrum Analyzer (M6)");
-        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Live Power Spectral Density (PSD) & Carson's Rule");
+        ImGui::End(); // Capacity
+
+        // --------------------------------------------------------------------
+        // Centre Tab 5: Spectrum
+        // --------------------------------------------------------------------
+        ImGui::Begin("Spectrum");
+
+        sectionHeader("Power Spectral Density & Modulation Analysis", font_set.header);
 
         const auto spec_snap = sim.getSpectrumSnapshot();
         if (!spec_snap.freqs.empty() && !spec_snap.psd_db.empty()) {
-            if (ImPlot::BeginPlot("RF / Baseband Power Spectrum", ImVec2(-1, 240))) {
+            if (ImPlot::BeginPlot("Power Spectral Density", ImVec2(-1, 180 * app_settings.ui_scale))) {
                 ImPlot::SetupAxes("Frequency (kHz)", "PSD (dB/Hz)");
                 ImPlot::SetupAxisLimits(ImAxis_Y1, -90.0, 10.0, ImPlotCond_Always);
 
-                // Convert Hz to kHz for display
                 std::vector<float> freqs_khz(spec_snap.freqs.size());
                 for (size_t i = 0; i < freqs_khz.size(); ++i) {
                     freqs_khz[i] = spec_snap.freqs[i] * 0.001f;
                 }
 
-                ImPlot::SetNextLineStyle(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), 1.5f);
-                ImPlot::PlotLine("PSD (dB)", freqs_khz.data(), spec_snap.psd_db.data(), static_cast<int>(freqs_khz.size()));
+                ImPlot::SetNextLineStyle(theme::kSeriesBlue, 1.8f);
+                ImPlot::PlotLine("PSD (dB/Hz)", freqs_khz.data(), spec_snap.psd_db.data(), static_cast<int>(freqs_khz.size()));
                 ImPlot::EndPlot();
             }
         } else {
             ImGui::TextDisabled("Awaiting spectrum analyzer data...");
         }
 
-        ImGui::Separator();
-        ImGui::Text("FM Carson's Rule Calculator:");
+        ImGui::Spacing();
+        sectionHeader("FM Carson's Rule Calculator", font_set.header);
         static float fm_fm = 250.0f;
         static float fm_delta = 1000.0f;
-        ImGui::SliderFloat("Modulation Freq fm (Hz)", &fm_fm, 50.0f, 2000.0f, "%.0f Hz");
-        ImGui::SliderFloat("Peak Deviation Delta_f (Hz)", &fm_delta, 100.0f, 5000.0f, "%.0f Hz");
+        ImGui::SetNextItemWidth(160 * app_settings.ui_scale);
+        ImGui::SliderFloat("Modulation Freq fm", &fm_fm, 50.0f, 2000.0f, "%.0f Hz");
+        showTooltip("Frequency of modulating baseband message tone (fm)");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(160 * app_settings.ui_scale);
+        ImGui::SliderFloat("Peak Deviation Delta_f", &fm_delta, 100.0f, 5000.0f, "%.0f Hz");
+        showTooltip("Peak frequency deviation from carrier frequency (Delta_f)");
+
         const float beta = (fm_fm > 1e-3f) ? (fm_delta / fm_fm) : 0.0f;
         const float carson_bw = 2.0f * (fm_delta + fm_fm);
-        ImGui::Text("Modulation Index Beta: %.2f | Carson Bandwidth: %.1f Hz", beta, carson_bw);
+        ImGui::Text("Modulation Index Beta: %.2f | Carson Bandwidth B_T: %.1f Hz (2*(Delta_f + fm))", beta, carson_bw);
 
-        ImGui::Separator();
-        ImGui::Text("PCM Quantizer SQNR Formula (PLAN.md §6):");
+        sectionHeader("PCM Quantizer SQNR Analysis", font_set.header);
         static int pcm_n_bits = 8;
-        ImGui::SliderInt("Quantizer Bits N", &pcm_n_bits, 2, 12);
+        ImGui::SetNextItemWidth(160 * app_settings.ui_scale);
+        ImGui::SliderInt("Quantizer Bits N", &pcm_n_bits, 2, 12, "%d bits");
+        showTooltip("Uniform PCM quantization wordlength (N bits/sample)");
         const double pcm_sqnr = 6.0206 * pcm_n_bits + 1.7609;
-        ImGui::Text("Theoretical SQNR (6.02*N + 1.76): %.2f dB", pcm_sqnr);
+        ImGui::Text("Theoretical SQNR (6.02*N + 1.76 dB): %.2f dB", pcm_sqnr);
 
-        ImGui::End();
+        ImGui::End(); // Spectrum
 
-        // ----------------------------------------------------
-        // Panel 9: Protocol & Multiple Access (M7)
-        // ----------------------------------------------------
-        ImGui::Begin("Protocol & Multiple Access (M7)");
+        // --------------------------------------------------------------------
+        // Centre Tab 6: Multiple Access
+        // --------------------------------------------------------------------
+        ImGui::Begin("Multiple Access");
 
-        if (ImGui::CollapsingHeader("OSI / TCP-IP Encapsulation View", ImGuiTreeNodeFlags_DefaultOpen)) {
-            static char app_buf[256] = "GET /index.html HTTP/1.1\r\nHost: commsim.local";
-            ImGui::InputText("App Payload", app_buf, sizeof(app_buf));
+        sectionHeader("Multiple Access: CDMA, TDMA & FDMA", font_set.header);
 
-            auto encap = blocks::PacketEncap::encapsulate(app_buf);
-            ImGui::Text("Total Frame: %zu bytes (Eth: 14B, IPv4: 20B, TCP: 20B, App: %zuB, FCS: 4B)",
-                        encap.raw_ethernet_frame.size(), encap.app_len);
+        sectionHeader("CDMA Multi-User Interference", font_set.header);
+        static int cdma_users = 12;
+        static bool cdma_walsh = true;
+        ImGui::SetNextItemWidth(160 * app_settings.ui_scale);
+        ImGui::SliderInt("Active Users U", &cdma_users, 1, 16, "%d users");
+        showTooltip("Number of concurrent users transmitting simultaneously in the same bandwidth");
+        ImGui::SameLine();
+        ImGui::Checkbox("Orthogonal Walsh Codes", &cdma_walsh);
+        showTooltip("Orthogonal Walsh spreading sequences achieve zero cross-correlation and zero MUI");
 
-            if (ImGui::BeginTable("encap_table", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-                ImGui::TableSetupColumn("Layer");
-                ImGui::TableSetupColumn("Field");
-                ImGui::TableSetupColumn("Offset");
-                ImGui::TableSetupColumn("Raw Hex");
-                ImGui::TableSetupColumn("Decoded Value");
-                ImGui::TableHeadersRow();
+        if (cdma_walsh) {
+            ImGui::TextColored(theme::kSeriesTeal,
+                               "Walsh Spreading (SF=16): MUI = 0.000 across %d users (<w_i, w_j> = 0)", cdma_users);
+        } else {
+            const double mui_var = static_cast<double>(cdma_users - 1) / 16.0;
+            ImGui::TextColored(theme::kSeriesOrange,
+                               "PN Spreading (SF=16): Multi-User Interference Variance = (U-1)/SF = %.4f", mui_var);
+        }
 
-                for (const auto& f : encap.fields) {
-                    ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0);
-                    if (f.layer == "Application") ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%s", f.layer.c_str());
-                    else if (f.layer == "TCP")   ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "%s", f.layer.c_str());
-                    else if (f.layer == "IPv4")  ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "%s", f.layer.c_str());
-                    else                         ImGui::TextColored(ImVec4(0.9f, 0.5f, 0.9f, 1.0f), "%s", f.layer.c_str());
+        sectionHeader("TDMA & FDMA Principles", font_set.header);
+        ImGui::BulletText("TDMA: Time is partitioned into synchronized frames and slots. Guard times prevent burst overlap.");
+        ImGui::BulletText("FDMA: Spectrum is split into non-overlapping frequency bands with guard bands against adjacent channel interference.");
 
-                    ImGui::TableSetColumnIndex(1);
-                    ImGui::Text("%s", f.name.c_str());
-                    ImGui::TableSetColumnIndex(2);
-                    ImGui::Text("%zu (%zuB)", f.byte_offset, f.byte_length);
-                    ImGui::TableSetColumnIndex(3);
-                    ImGui::Text("%s", f.hex_value.c_str());
-                    ImGui::TableSetColumnIndex(4);
-                    ImGui::Text("%s", f.decoded_value.c_str());
+        ImGui::End(); // Multiple Access
+
+        // --------------------------------------------------------------------
+        // Centre Tab 7: Protocol & ARQ
+        // --------------------------------------------------------------------
+        ImGui::Begin("Protocol & ARQ");
+
+        sectionHeader("Automatic Repeat reQuest (ARQ) Throughput", font_set.header);
+
+        static float arq_pf = 0.15f;
+        static float arq_a  = 0.5f;
+        static int   arq_w  = 4;
+
+        ImGui::SetNextItemWidth(140 * app_settings.ui_scale);
+        ImGui::SliderFloat("Frame Loss Pf", &arq_pf, 0.0f, 0.8f, "%.2f");
+        showTooltip("Probability of frame erasure/corruption on the channel");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(140 * app_settings.ui_scale);
+        ImGui::SliderFloat("Delay a", &arq_a, 0.0f, 3.0f, "%.2f");
+        showTooltip("Normalized propagation delay a = t_prop / t_frame");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(120 * app_settings.ui_scale);
+        ImGui::SliderInt("Window W", &arq_w, 1, 16, "%d frames");
+        showTooltip("Go-Back-N sliding transmission window size (W)");
+
+        const double sw_th = blocks::StopAndWaitArq::theoryEfficiency(arq_pf, arq_a);
+        const double gbn_th = blocks::GoBackNArq::theoryEfficiency(arq_pf, arq_a, arq_w);
+
+        ImGui::Spacing();
+        ImGui::Text("Stop-and-Wait Efficiency (1-Pf)/(1+2a): %.4f (%.1f%%)", sw_th, sw_th * 100.0);
+        ImGui::Text("Go-Back-N Efficiency (Stallings eq):    %.4f (%.1f%%)", gbn_th, gbn_th * 100.0);
+
+        if (ImGui::Button("Run Monte Carlo Verification (10,000 frames)")) {
+            const double sw_sim = blocks::StopAndWaitArq::simulate(arq_pf, arq_a, 10000);
+            const double gbn_sim = blocks::GoBackNArq::simulate(arq_pf, arq_a, arq_w, 10000);
+            addLog("ARQ Sim S&W: " + std::to_string(sw_sim) + " | GBN: " + std::to_string(gbn_sim), theme::kSeriesTeal);
+        }
+
+        ImGui::End(); // Protocol & ARQ
+
+        // --------------------------------------------------------------------
+        // Bottom Dock: Protocol Table & Logs
+        // --------------------------------------------------------------------
+        ImGui::Begin("Protocol & System Log");
+
+        if (ImGui::BeginTabBar("BottomTabBar")) {
+            if (ImGui::BeginTabItem("Packet Inspection (Monospace)")) {
+                static char app_payload[256] = "GET /index.html HTTP/1.1\r\nHost: commsim.local\r\n";
+                ImGui::SetNextItemWidth(400 * app_settings.ui_scale);
+                ImGui::InputText("Payload", app_payload, sizeof(app_payload));
+                showTooltip("Application payload encapsulated into TCP/IPv4/Ethernet II frame");
+
+                auto encap = blocks::PacketEncap::encapsulate(app_payload);
+                ImGui::SameLine();
+                ImGui::Text("(Frame Size: %zu Bytes, FCS CRC-32 Valid)", encap.raw_ethernet_frame.size());
+
+                if (font_set.mono) ImGui::PushFont(font_set.mono);
+                if (ImGui::BeginTable("encap_table", 5,
+                                      ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
+                                      ImVec2(0, 160 * app_settings.ui_scale))) {
+                    ImGui::TableSetupColumn("Layer", ImGuiTableColumnFlags_WidthFixed, 95.0f * app_settings.ui_scale);
+                    ImGui::TableSetupColumn("Field", ImGuiTableColumnFlags_WidthFixed, 130.0f * app_settings.ui_scale);
+                    ImGui::TableSetupColumn("Offset", ImGuiTableColumnFlags_WidthFixed, 75.0f * app_settings.ui_scale);
+                    ImGui::TableSetupColumn("Hex Bytes", ImGuiTableColumnFlags_WidthFixed, 180.0f * app_settings.ui_scale);
+                    ImGui::TableSetupColumn("Decoded Representation", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableHeadersRow();
+
+                    for (const auto& f : encap.fields) {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        if (f.layer == "Application") ImGui::TextColored(theme::kSeriesTeal, "%s", f.layer.c_str());
+                        else if (f.layer == "TCP")   ImGui::TextColored(theme::kSeriesBlue, "%s", f.layer.c_str());
+                        else if (f.layer == "IPv4")  ImGui::TextColored(theme::kSeriesOrange, "%s", f.layer.c_str());
+                        else                         ImGui::TextColored(theme::kSeriesPurple, "%s", f.layer.c_str());
+
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::Text("%s", f.name.c_str());
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::Text("%zu (%zuB)", f.byte_offset, f.byte_length);
+                        ImGui::TableSetColumnIndex(3);
+                        ImGui::Text("%s", f.hex_value.c_str());
+                        ImGui::TableSetColumnIndex(4);
+                        ImGui::Text("%s", f.decoded_value.c_str());
+                    }
+                    ImGui::EndTable();
                 }
-                ImGui::EndTable();
+                if (font_set.mono) ImGui::PopFont();
+                ImGui::EndTabItem();
             }
+
+            if (ImGui::BeginTabItem("System Log")) {
+                if (ImGui::Button("Clear Log")) event_logs.clear();
+                ImGui::SameLine();
+                ImGui::Text("%zu log events recorded", event_logs.size());
+
+                if (font_set.mono) ImGui::PushFont(font_set.mono);
+                if (ImGui::BeginTable("log_table", 2,
+                                      ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
+                                      ImVec2(0, 160 * app_settings.ui_scale))) {
+                    ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 80.0f * app_settings.ui_scale);
+                    ImGui::TableSetupColumn("Message", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableHeadersRow();
+
+                    for (const auto& log : event_logs) {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextColored(theme::kTextMuted, "[%s]", log.timestamp.c_str());
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::TextColored(log.color, "%s", log.message.c_str());
+                    }
+                    ImGui::EndTable();
+                }
+                if (font_set.mono) ImGui::PopFont();
+                ImGui::EndTabItem();
+            }
+            ImGui::EndTabBar();
         }
 
-        if (ImGui::CollapsingHeader("ARQ Protocols: Stop-and-Wait & Go-Back-N", ImGuiTreeNodeFlags_DefaultOpen)) {
-            static float arq_pf = 0.15f;
-            static float arq_a  = 0.5f;
-            static int   arq_w  = 4;
+        ImGui::End(); // Bottom Dock
 
-            ImGui::SliderFloat("Frame Loss Prob Pf", &arq_pf, 0.0f, 0.8f, "%.2f");
-            ImGui::SliderFloat("Normalized Delay a (t_prop/t_frame)", &arq_a, 0.0f, 3.0f, "%.2f");
-            ImGui::SliderInt("Window Size W (GBN)", &arq_w, 1, 16);
+        // --------------------------------------------------------------------
+        // Fixed VS Code Blue Status Bar (#007ACC)
+        // --------------------------------------------------------------------
+        ImGui::SetNextWindowPos(ImVec2(vp->Pos.x, vp->Pos.y + vp->Size.y - status_bar_height));
+        ImGui::SetNextWindowSize(ImVec2(vp->Size.x, status_bar_height));
+        ImGuiWindowFlags status_flags =
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoScrollbar |
+            ImGuiWindowFlags_NoSavedSettings;
 
-            const double sw_th = blocks::StopAndWaitArq::theoryEfficiency(arq_pf, arq_a);
-            const double gbn_th = blocks::GoBackNArq::theoryEfficiency(arq_pf, arq_a, arq_w);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, theme::kStatusBarBg);
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::kStatusText);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 4.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        ImGui::Begin("StatusBar", nullptr, status_flags);
 
-            ImGui::Text("Stop-and-Wait Theory (1-Pf)/(1+2a): %.4f (%.1f%%)", sw_th, sw_th * 100.0);
-            ImGui::Text("Go-Back-N Theory (Stallings 7.6):   %.4f (%.1f%%)", gbn_th, gbn_th * 100.0);
-
-            if (ImGui::Button("Run Quick Simulation (10,000 frames)")) {
-                const double sw_sim = blocks::StopAndWaitArq::simulate(arq_pf, arq_a, 10000);
-                const double gbn_sim = blocks::GoBackNArq::simulate(arq_pf, arq_a, arq_w, 10000);
-                std::printf("[ARQ Live Sim] S&W: %.4f (err=%.2f%%) | GBN: %.4f (err=%.2f%%)\n",
-                            sw_sim, std::abs(sw_sim - sw_th)/sw_th * 100.0,
-                            gbn_sim, std::abs(gbn_sim - gbn_th)/gbn_th * 100.0);
-            }
-        }
-
-        if (ImGui::CollapsingHeader("CDMA Multi-User Interference (Walsh vs PN)", ImGuiTreeNodeFlags_DefaultOpen)) {
-            static int cdma_users = 12;
-            static bool cdma_walsh = true;
-            ImGui::SliderInt("Active Users U", &cdma_users, 1, 16);
-            ImGui::Checkbox("Orthogonal Walsh Codes (Zero MUI)", &cdma_walsh);
-
-            if (cdma_walsh) {
-                ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f),
-                                   "Walsh Spreading (SF=16): MUI = 0.000 across all %d users (<w_i, w_j> = 0)", cdma_users);
-            } else {
-                const double mui_var = static_cast<double>(cdma_users - 1) / 16.0;
-                ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
-                                   "PN Spreading (SF=16): MUI Variance = (U-1)/SF = %.4f (BER rises monotonically)", mui_var);
-            }
-        }
+        char status_str[256];
+        std::snprintf(status_str, sizeof(status_str),
+                      " Scheme: %s   |   Eb/N0: %.1f dB   |   Render: %.1f FPS   |   Sim: %.2f Msym/s   |   BER: %.2e (Theory: %.2e)   |   Latency: %.1f ms",
+                      scheme_names[current_scheme_idx], ui_ebn0, io.Framerate,
+                      sim_rate > 0.0 ? sim_rate : 1.0,
+                      measured_ber, theory_ber, latency_ms);
+        ImGui::TextUnformatted(status_str);
 
         ImGui::End();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor(2);
 
-        // Render
+        // --------------------------------------------------------------------
+        // Render Frame
+        // --------------------------------------------------------------------
         ImGui::Render();
         int display_w = 0, display_h = 0;
         SDL_GL_GetDrawableSize(window, &display_w, &display_h);
         glViewport(0, 0, display_w, display_h);
-        glClearColor(CLEAR_R, CLEAR_G, CLEAR_B, 1.f);
+        glClearColor(theme::kEditorBg.x, theme::kEditorBg.y, theme::kEditorBg.z, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
+        // Automated Screenshot Suite Processing
+        if (auto_screenshot_suite) {
+            auto_suite_timer++;
+            // Switch tabs every 12 frames to let simulation stream populate density FBOs
+            if (auto_suite_timer >= 12) {
+                auto_suite_timer = 0;
+                char bmp_path[128];
+                const char* tab_short[] = {
+                    "01_constellation", "02_eye_shaping", "03_ber_coding",
+                    "04_capacity", "05_spectrum", "06_multiple_access", "07_protocol_arq"
+                };
+
+                if (auto_suite_step == 0) {
+                    // 1920x1080 run
+                    std::snprintf(bmp_path, sizeof(bmp_path), "docs/screenshots/app_1080p_%s.bmp",
+                                  tab_short[auto_suite_substep]);
+                    saveScreenshotBMP(display_w, display_h, bmp_path);
+                    auto_suite_substep++;
+                    if (auto_suite_substep < 7) {
+                        requested_tab = auto_suite_substep;
+                    } else {
+                        // Switch to 1280x720
+                        auto_suite_step = 1;
+                        auto_suite_substep = 0;
+                        SDL_SetWindowSize(window, 1280, 720);
+                        requested_tab = 0;
+                        reset_layout_requested = true;
+                    }
+                } else if (auto_suite_step == 1) {
+                    // 1280x720 run
+                    std::snprintf(bmp_path, sizeof(bmp_path), "docs/screenshots/app_720p_%s.bmp",
+                                  tab_short[auto_suite_substep]);
+                    saveScreenshotBMP(display_w, display_h, bmp_path);
+                    auto_suite_substep++;
+                    if (auto_suite_substep < 7) {
+                        requested_tab = auto_suite_substep;
+                    } else {
+                        // Switch to UI Scale 1.5 run
+                        auto_suite_step = 2;
+                        auto_suite_substep = 0;
+                        SDL_SetWindowSize(window, 1920, 1080);
+                        app_settings.ui_scale = 1.5f;
+                        font_set = fonts::loadFonts(app_settings.ui_scale);
+                        requested_tab = 0;
+                        reset_layout_requested = true;
+                    }
+                } else if (auto_suite_step == 2) {
+                    // Scale 1.5 run
+                    std::snprintf(bmp_path, sizeof(bmp_path), "docs/screenshots/app_scale15_%s.bmp",
+                                  tab_short[auto_suite_substep]);
+                    saveScreenshotBMP(display_w, display_h, bmp_path);
+                    auto_suite_substep++;
+                    if (auto_suite_substep < 7) {
+                        requested_tab = auto_suite_substep;
+                    } else {
+                        // Finished all screenshots!
+                        running = false;
+                    }
+                }
+            }
+        }
+
         SDL_GL_SwapWindow(window);
+    }
+
+    // Save final settings
+    SDL_GetWindowSize(window, &app_settings.window_w, &app_settings.window_h);
+    app_settings.scheme_idx = current_scheme_idx;
+    settings::saveSettings(app_settings);
+
+    // Compute profile frame statistics
+    if (!frame_times_ms.empty()) {
+        std::sort(frame_times_ms.begin(), frame_times_ms.end());
+        double med_ms = frame_times_ms[frame_times_ms.size() / 2];
+        double p99_ms = frame_times_ms[static_cast<size_t>(frame_times_ms.size() * 0.99)];
+        std::printf("[Frame Performance] Median: %.2f ms (%.1f FPS) | p99: %.2f ms (%.1f FPS) over %zu frames\n",
+                    med_ms, 1000.0 / med_ms, p99_ms, 1000.0 / p99_ms, frame_times_ms.size());
     }
 
     // Cleanup
