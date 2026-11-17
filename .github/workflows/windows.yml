@@ -1,0 +1,134 @@
+name: Windows Build & Test
+
+on:
+  push:
+    branches: [ main, feat/ui-overhaul ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:        # allow manual trigger from the Actions tab
+
+jobs:
+  build-windows:
+    name: Build & Test (windows-latest / MSVC)
+    runs-on: windows-latest
+
+    steps:
+      # ------------------------------------------------------------------ #
+      # 1. Checkout
+      # ------------------------------------------------------------------ #
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ------------------------------------------------------------------ #
+      # 2. Set up MSVC environment for Ninja
+      #    (windows-latest has VS 2022; ilammy/msvc-dev-cmd runs vcvars64)
+      # ------------------------------------------------------------------ #
+      - name: Set up MSVC (vcvars64)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # ------------------------------------------------------------------ #
+      # 3. Cache the FetchContent dependency downloads
+      #    Key on CMakeLists.txt so a dep-version bump invalidates the cache
+      # ------------------------------------------------------------------ #
+      - name: Cache CMake FetchContent downloads
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: windows-deps-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: |
+            windows-deps-
+
+      # ------------------------------------------------------------------ #
+      # 4. Configure
+      #    - Ninja generator (fast, single-config)
+      #    - cl.exe chosen via MSVC env vars set by step 2
+      # ------------------------------------------------------------------ #
+      - name: Configure CMake
+        run: |
+          cmake -S . -B build ^
+                -G Ninja ^
+                -DCMAKE_BUILD_TYPE=Release ^
+                -DCMAKE_C_COMPILER=cl ^
+                -DCMAKE_CXX_COMPILER=cl
+        shell: cmd
+
+      # ------------------------------------------------------------------ #
+      # 5. Build
+      # ------------------------------------------------------------------ #
+      - name: Build
+        run: cmake --build build --config Release --parallel
+        shell: cmd
+
+      # ------------------------------------------------------------------ #
+      # 6. Run all 62 tests (all headless – no display required)
+      # ------------------------------------------------------------------ #
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure --parallel 4
+        shell: cmd
+
+      # ------------------------------------------------------------------ #
+      # 7. Package the Windows executable
+      #    SDL2 is built static → only the .exe is needed
+      # ------------------------------------------------------------------ #
+      - name: Package release artifact
+        shell: pwsh
+        run: |
+          $out = "commsim-studio-windows"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+
+          Copy-Item "build\app\commsim_studio.exe" "$out\"
+
+          # Embed a README so the download is self-explanatory
+          @"
+          commsim-studio  –  Data Communications Simulation Engine
+          ==========================================================
+          Team members:
+            Ashutosh Mishra     (124EI0048)
+            Tamanna Sahu        (124EI0008)
+            Sabyasachi Karsharma (124EI0032)
+            Aditya Ankush Dhonde (124EI0029)
+
+          Requirements:
+            • Windows 10 / 11 (64-bit)
+            • A GPU that supports OpenGL 3.3 Core Profile
+              (any dedicated GPU or Intel HD 4000+ / AMD GCN+)
+
+          Run:
+            Double-click commsim_studio.exe
+            No installer or additional DLLs required (SDL2 is statically linked).
+
+          Build info:
+            Compiler  : MSVC (cl.exe, x64)
+            Commit    : ${{ github.sha }}
+            Branch    : ${{ github.ref_name }}
+            Built on  : $(Get-Date -Format 'yyyy-MM-dd HH:mm UTC')
+          "@ | Set-Content "$out\README.txt"
+
+          Compress-Archive -Path "$out\*" -DestinationPath "commsim-studio-windows.zip"
+          Write-Host "Packaged: commsim-studio-windows.zip"
+          Get-Item "commsim-studio-windows.zip" | Select-Object Name, Length
+
+      # ------------------------------------------------------------------ #
+      # 8. Upload artifact (retained for 30 days)
+      # ------------------------------------------------------------------ #
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: commsim-studio-windows
+          path: commsim-studio-windows.zip
+          retention-days: 30
+
+      # ------------------------------------------------------------------ #
+      # 9. (On tagged push) attach zip to a GitHub Release
+      # ------------------------------------------------------------------ #
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: commsim-studio-windows.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
