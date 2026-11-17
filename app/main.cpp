@@ -991,55 +991,104 @@ int main(int argc, char** argv)
         // --------------------------------------------------------------------
         ImGui::Begin("Spectrum");
 
-        sectionHeader("Power Spectral Density & Modulation Analysis", font_set.header);
+        // ---- Live PSD Plot (takes most of the vertical space) ---------------
+        sectionHeader("Power Spectral Density (Live Baseband Signal)", font_set.header);
 
         const auto spec_snap = sim.getSpectrumSnapshot();
-        const float spec_plot_h = std::max(240.0f, ImGui::GetContentRegionAvail().y - 190.0f);
+        // Reserve ~220 px for the two calculator rows below; PSD gets the rest
+        const float spec_avail   = ImGui::GetContentRegionAvail().y;
+        const float spec_plot_h  = std::max(260.0f, spec_avail - 220.0f);
+
         if (!spec_snap.freqs.empty() && !spec_snap.psd_db.empty()) {
-            if (ImPlot::BeginPlot("Power Spectral Density (PSD)", ImVec2(-1, spec_plot_h))) {
-                ImPlot::SetupAxes("Frequency (kHz)", "PSD (dB/Hz)");
-                ImPlot::SetupAxisLimits(ImAxis_Y1, -70.0, 5.0, ImPlotCond_Always);
+            // Compute data range so we can set sensible axis limits
+            float psd_min = spec_snap.psd_db[0], psd_max = spec_snap.psd_db[0];
+            std::vector<float> freqs_khz(spec_snap.freqs.size());
+            for (size_t i = 0; i < spec_snap.freqs.size(); ++i) {
+                freqs_khz[i] = spec_snap.freqs[i] * 0.001f;
+                psd_min = std::min(psd_min, spec_snap.psd_db[i]);
+                psd_max = std::max(psd_max, spec_snap.psd_db[i]);
+            }
+            const float y_lo = psd_min - 10.0f;          // 10 dB headroom below
+            const float y_hi = psd_max + 6.0f;           // 6 dB headroom above
 
-                std::vector<float> freqs_khz(spec_snap.freqs.size());
-                for (size_t i = 0; i < freqs_khz.size(); ++i) {
-                    freqs_khz[i] = spec_snap.freqs[i] * 0.001f;
-                }
-
+            ImPlot::PushStyleColor(ImPlotCol_PlotBg,  ImVec4(0.08f, 0.10f, 0.12f, 1.0f));
+            ImPlot::PushStyleColor(ImPlotCol_FrameBg, ImVec4(0.06f, 0.08f, 0.10f, 1.0f));
+            if (ImPlot::BeginPlot("##psd_live", ImVec2(-1, spec_plot_h),
+                                   ImPlotFlags_NoTitle | ImPlotFlags_Crosshairs)) {
+                ImPlot::SetupAxes("Frequency (kHz)", "PSD (dB/Hz)",
+                                  ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_None);
+                ImPlot::SetupAxisLimits(ImAxis_Y1, static_cast<double>(y_lo),
+                                        static_cast<double>(y_hi), ImPlotCond_Always);
+                ImPlot::SetupAxisLimits(ImAxis_X1,
+                    static_cast<double>(freqs_khz.front()),
+                    static_cast<double>(freqs_khz.back()),
+                    ImPlotCond_Once);
+                // Shaded fill under the curve
+                ImPlot::SetNextFillStyle(ImVec4(0.20f, 0.72f, 0.72f, 0.18f));
+                ImPlot::PlotShaded("##psd_fill", freqs_khz.data(),
+                                   spec_snap.psd_db.data(),
+                                   static_cast<int>(freqs_khz.size()),
+                                   static_cast<double>(y_lo));
+                // Main line
                 ImPlot::SetNextLineStyle(theme::kSeriesTeal, 2.0f);
-                ImPlot::PlotLine("Live Baseband PSD", freqs_khz.data(), spec_snap.psd_db.data(), static_cast<int>(freqs_khz.size()));
+                ImPlot::PlotLine("PSD (dB/Hz)", freqs_khz.data(),
+                                 spec_snap.psd_db.data(),
+                                 static_cast<int>(freqs_khz.size()));
                 ImPlot::EndPlot();
             }
+            ImPlot::PopStyleColor(2);
         } else {
-            ImGui::TextDisabled("Awaiting spectrum analyzer data...");
+            const float placeholder_h = std::max(260.0f, spec_avail - 220.0f);
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.08f, 0.10f, 0.12f, 1.0f));
+            ImGui::BeginChild("##psd_placeholder", ImVec2(-1, placeholder_h), true);
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + placeholder_h * 0.4f);
+            const char* wait_msg = "Awaiting spectrum data  —  start the simulation to see the live PSD";
+            ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x -
+                                   ImGui::CalcTextSize(wait_msg).x) * 0.5f);
+            ImGui::TextDisabled("%s", wait_msg);
+            ImGui::EndChild();
+            ImGui::PopStyleColor();
         }
 
         ImGui::Spacing();
-        sectionHeader("Analog Modulation & Carson's Rule Analysis", font_set.header);
-        static float fm_fm = 250.0f;
-        static float fm_delta = 1000.0f;
-        ImGui::SetNextItemWidth(140 * app_settings.ui_scale);
-        ImGui::SliderFloat("Message Freq (fm)", &fm_fm, 50.0f, 2000.0f, "%.0f Hz");
-        showTooltip("Frequency of modulating baseband message tone (fm)");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(160 * app_settings.ui_scale);
-        ImGui::SliderFloat("Peak Deviation (Delta_f)", &fm_delta, 100.0f, 5000.0f, "%.0f Hz");
-        showTooltip("Peak frequency deviation from carrier frequency (Delta_f)");
 
-        const float beta = (fm_fm > 1e-3f) ? (fm_delta / fm_fm) : 0.0f;
-        const float carson_bw = 2.0f * (fm_delta + fm_fm);
-        ImGui::SameLine();
-        ImGui::TextColored(theme::kSeriesYellow, "Beta: %.2f | Carson Bandwidth: %.0f Hz", beta, carson_bw);
+        // ---- Analog Modulation / Carson's Rule row ---------------------------
+        if (ImGui::CollapsingHeader("FM Carson's Rule Calculator", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Indent(8.0f);
+            static float fm_fm = 250.0f;
+            static float fm_delta = 1000.0f;
+            ImGui::SetNextItemWidth(170 * app_settings.ui_scale);
+            ImGui::SliderFloat("Message Freq fm", &fm_fm, 50.0f, 2000.0f, "%.0f Hz");
+            showTooltip("Frequency of the modulating baseband tone (fm)");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(170 * app_settings.ui_scale);
+            ImGui::SliderFloat("Peak Deviation Df", &fm_delta, 100.0f, 5000.0f, "%.0f Hz");
+            showTooltip("Peak instantaneous frequency deviation from the carrier (Delta_f)");
+            const float beta       = (fm_fm > 1e-3f) ? (fm_delta / fm_fm) : 0.0f;
+            const float carson_bw  = 2.0f * (fm_delta + fm_fm);
+            ImGui::TextColored(theme::kSeriesYellow,
+                "Modulation Index β = %.2f   |   Carson BW  B_T = 2(Δf + fm) = %.0f Hz",
+                beta, carson_bw);
+            ImGui::Unindent(8.0f);
+        }
 
-        sectionHeader("Source Coding: PCM Quantizer SQNR vs Bit Depth", font_set.header);
-        static int pcm_n_bits = 8;
-        ImGui::SetNextItemWidth(140 * app_settings.ui_scale);
-        ImGui::SliderInt("Resolution (N)", &pcm_n_bits, 2, 12, "%d bits");
-        showTooltip("Uniform PCM quantization wordlength (N bits/sample)");
-        const double pcm_sqnr = 6.0206 * pcm_n_bits + 1.7609;
-        ImGui::SameLine();
-        ImGui::TextColored(theme::kSeriesTeal, "Theoretical SQNR (6.02*N + 1.76 dB): %.2f dB", pcm_sqnr);
-        ImGui::SameLine();
-        ImGui::TextColored(theme::kTextMuted, "| Quantization Levels: %d", 1 << pcm_n_bits);
+        ImGui::Spacing();
+
+        // ---- PCM SQNR row ---------------------------------------------------
+        if (ImGui::CollapsingHeader("PCM Quantizer SQNR Analysis", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Indent(8.0f);
+            static int pcm_n_bits = 8;
+            ImGui::SetNextItemWidth(200 * app_settings.ui_scale);
+            ImGui::SliderInt("Quantizer Bits N", &pcm_n_bits, 2, 16, "%d bits");
+            showTooltip("PCM word length: each additional bit adds ~6 dB to SQNR");
+            const double pcm_sqnr   = 6.0206 * pcm_n_bits + 1.7609;
+            const int    pcm_levels = 1 << pcm_n_bits;
+            ImGui::SameLine();
+            ImGui::TextColored(theme::kSeriesTeal,
+                "SQNR = 6.02×%d + 1.76 = %.2f dB    (L = %d levels)",
+                pcm_n_bits, pcm_sqnr, pcm_levels);
+            ImGui::Unindent(8.0f);
+        }
 
         ImGui::End(); // Spectrum
 
