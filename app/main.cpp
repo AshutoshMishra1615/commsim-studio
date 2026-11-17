@@ -323,6 +323,7 @@ int main(int argc, char** argv)
     };
     int requested_tab = -1;
     bool reset_layout_requested = true; // Build default layout on startup
+    float pending_ui_scale = -1.0f;
 
     // Automated screenshot suite runner state
     int auto_suite_step = 0;
@@ -371,18 +372,24 @@ int main(int argc, char** argv)
                     requested_tab = event.key.keysym.sym - SDLK_1;
                 } else if (ctrl && (event.key.keysym.sym == SDLK_EQUALS || event.key.keysym.sym == SDLK_PLUS)) {
                     if (app_settings.ui_scale < 2.0f) {
-                        app_settings.ui_scale = std::min(2.0f, app_settings.ui_scale + 0.1f);
-                        font_set = fonts::loadFonts(app_settings.ui_scale);
-                        addLog("UI Scale increased to " + std::to_string(app_settings.ui_scale), theme::kSeriesBlue);
+                        pending_ui_scale = std::min(2.0f, app_settings.ui_scale + 0.1f);
                     }
                 } else if (ctrl && event.key.keysym.sym == SDLK_MINUS) {
                     if (app_settings.ui_scale > 0.75f) {
-                        app_settings.ui_scale = std::max(0.75f, app_settings.ui_scale - 0.1f);
-                        font_set = fonts::loadFonts(app_settings.ui_scale);
-                        addLog("UI Scale decreased to " + std::to_string(app_settings.ui_scale), theme::kSeriesBlue);
+                        pending_ui_scale = std::max(0.75f, app_settings.ui_scale - 0.1f);
                     }
                 }
             }
+        }
+
+        // Handle pending UI scale / font reload before starting new frame
+        if (pending_ui_scale > 0.0f) {
+            app_settings.ui_scale = pending_ui_scale;
+            pending_ui_scale = -1.0f;
+            ImGui_ImplOpenGL3_DestroyFontsTexture();
+            font_set = fonts::loadFonts(app_settings.ui_scale);
+            ImGui_ImplOpenGL3_CreateDeviceObjects();
+            addLog("UI Scale changed to " + std::to_string(app_settings.ui_scale), theme::kSeriesBlue);
         }
 
         // Start ImGui Frame
@@ -475,19 +482,19 @@ int main(int argc, char** argv)
                 ImGui::Separator();
                 if (ImGui::BeginMenu("UI Scale")) {
                     if (ImGui::MenuItem("75%",  nullptr, std::abs(app_settings.ui_scale - 0.75f) < 0.01f)) {
-                        app_settings.ui_scale = 0.75f; font_set = fonts::loadFonts(app_settings.ui_scale);
+                        pending_ui_scale = 0.75f;
                     }
                     if (ImGui::MenuItem("100%", nullptr, std::abs(app_settings.ui_scale - 1.00f) < 0.01f)) {
-                        app_settings.ui_scale = 1.00f; font_set = fonts::loadFonts(app_settings.ui_scale);
+                        pending_ui_scale = 1.00f;
                     }
                     if (ImGui::MenuItem("125%", nullptr, std::abs(app_settings.ui_scale - 1.25f) < 0.01f)) {
-                        app_settings.ui_scale = 1.25f; font_set = fonts::loadFonts(app_settings.ui_scale);
+                        pending_ui_scale = 1.25f;
                     }
                     if (ImGui::MenuItem("150%", nullptr, std::abs(app_settings.ui_scale - 1.50f) < 0.01f)) {
-                        app_settings.ui_scale = 1.50f; font_set = fonts::loadFonts(app_settings.ui_scale);
+                        pending_ui_scale = 1.50f;
                     }
                     if (ImGui::MenuItem("200%", nullptr, std::abs(app_settings.ui_scale - 2.00f) < 0.01f)) {
-                        app_settings.ui_scale = 2.00f; font_set = fonts::loadFonts(app_settings.ui_scale);
+                        pending_ui_scale = 2.00f;
                     }
                     ImGui::EndMenu();
                 }
@@ -1261,8 +1268,7 @@ int main(int argc, char** argv)
                         auto_suite_step = 2;
                         auto_suite_substep = 0;
                         SDL_SetWindowSize(window, 1920, 1080);
-                        app_settings.ui_scale = 1.5f;
-                        font_set = fonts::loadFonts(app_settings.ui_scale);
+                        pending_ui_scale = 1.5f;
                         requested_tab = 0;
                         reset_layout_requested = true;
                     }
