@@ -432,7 +432,7 @@ private:
             g->connect(isi_id, 0, awgn_id, 0);
             g->connect(awgn_id, 0, wf_id, 0);       // Continuous waveform probe
             g->connect(wf_id, 0, spec_id, 0);       // Spectrum probe
-            g->connect(wf_id, 0, rx_mf_id, 0);
+            g->connect(spec_id, 0, rx_mf_id, 0);    // Forward to matched filter
             g->connect(rx_mf_id, 0, eye_id, 0);     // Eye probe after matched filter
             g->connect(eye_id, 0, down_id, 0);      // Downsample at decision instant
             g->connect(down_id, 0, constel_id, 0);  // Constellation of sampled symbols
@@ -525,7 +525,7 @@ private:
             g->connect(isi_id, 0, awgn_id, 0);
             g->connect(awgn_id, 0, wf_id, 0);       // Tap noisy symbols to waveform probe
             g->connect(wf_id, 0, spec_id, 0);      // Tap to spectrum probe
-            g->connect(wf_id, 0, constel_id, 0);   // Tap to constellation probe
+            g->connect(spec_id, 0, constel_id, 0); // Forward to constellation probe
             g->connect(constel_id, 0, eye_id, 0);  // Tap to eye probe
             g->connect(eye_id, 0, demod_id, 0);
             g->connect(demod_id, 0, probe_id, 1);  // RX bits

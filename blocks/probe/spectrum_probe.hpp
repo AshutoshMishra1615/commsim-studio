@@ -179,12 +179,17 @@ public:
     }
 
     void work(const std::vector<engine::Stream<engine::cf>*>& in,
-              std::vector<engine::Stream<engine::cf>*>& /*out*/,
+              std::vector<engine::Stream<engine::cf>*>& out,
               size_t n) override {
         if (in.empty() || !in[0]) return;
         const auto& s = in[0]->buf;
         const size_t in_n = s.empty() ? n : s.size();
         if (in_n == 0) return;
+
+        if (!out.empty() && out[0]) {
+            out[0]->resize(in_n);
+            out[0]->buf = in[0]->buf;
+        }
 
         std::vector<float> f_out;
         auto psd = FftCore::computePsdDb(s, n_fft_, &f_out, fs_);
