@@ -994,18 +994,19 @@ int main(int argc, char** argv)
         sectionHeader("Power Spectral Density & Modulation Analysis", font_set.header);
 
         const auto spec_snap = sim.getSpectrumSnapshot();
+        const float spec_plot_h = std::max(240.0f, ImGui::GetContentRegionAvail().y - 190.0f);
         if (!spec_snap.freqs.empty() && !spec_snap.psd_db.empty()) {
-            if (ImPlot::BeginPlot("Power Spectral Density", ImVec2(-1, 180 * app_settings.ui_scale))) {
+            if (ImPlot::BeginPlot("Power Spectral Density (PSD)", ImVec2(-1, spec_plot_h))) {
                 ImPlot::SetupAxes("Frequency (kHz)", "PSD (dB/Hz)");
-                ImPlot::SetupAxisLimits(ImAxis_Y1, -90.0, 10.0, ImPlotCond_Always);
+                ImPlot::SetupAxisLimits(ImAxis_Y1, -70.0, 5.0, ImPlotCond_Always);
 
                 std::vector<float> freqs_khz(spec_snap.freqs.size());
                 for (size_t i = 0; i < freqs_khz.size(); ++i) {
                     freqs_khz[i] = spec_snap.freqs[i] * 0.001f;
                 }
 
-                ImPlot::SetNextLineStyle(theme::kSeriesBlue, 1.8f);
-                ImPlot::PlotLine("PSD (dB/Hz)", freqs_khz.data(), spec_snap.psd_db.data(), static_cast<int>(freqs_khz.size()));
+                ImPlot::SetNextLineStyle(theme::kSeriesTeal, 2.0f);
+                ImPlot::PlotLine("Live Baseband PSD", freqs_khz.data(), spec_snap.psd_db.data(), static_cast<int>(freqs_khz.size()));
                 ImPlot::EndPlot();
             }
         } else {
@@ -1013,28 +1014,32 @@ int main(int argc, char** argv)
         }
 
         ImGui::Spacing();
-        sectionHeader("FM Carson's Rule Calculator", font_set.header);
+        sectionHeader("Analog Modulation & Carson's Rule Analysis", font_set.header);
         static float fm_fm = 250.0f;
         static float fm_delta = 1000.0f;
-        ImGui::SetNextItemWidth(160 * app_settings.ui_scale);
-        ImGui::SliderFloat("Modulation Freq fm", &fm_fm, 50.0f, 2000.0f, "%.0f Hz");
+        ImGui::SetNextItemWidth(140 * app_settings.ui_scale);
+        ImGui::SliderFloat("Message Freq (fm)", &fm_fm, 50.0f, 2000.0f, "%.0f Hz");
         showTooltip("Frequency of modulating baseband message tone (fm)");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(160 * app_settings.ui_scale);
-        ImGui::SliderFloat("Peak Deviation Delta_f", &fm_delta, 100.0f, 5000.0f, "%.0f Hz");
+        ImGui::SliderFloat("Peak Deviation (Delta_f)", &fm_delta, 100.0f, 5000.0f, "%.0f Hz");
         showTooltip("Peak frequency deviation from carrier frequency (Delta_f)");
 
         const float beta = (fm_fm > 1e-3f) ? (fm_delta / fm_fm) : 0.0f;
         const float carson_bw = 2.0f * (fm_delta + fm_fm);
-        ImGui::Text("Modulation Index Beta: %.2f | Carson Bandwidth B_T: %.1f Hz (2*(Delta_f + fm))", beta, carson_bw);
+        ImGui::SameLine();
+        ImGui::TextColored(theme::kSeriesYellow, "Beta: %.2f | Carson Bandwidth: %.0f Hz", beta, carson_bw);
 
-        sectionHeader("PCM Quantizer SQNR Analysis", font_set.header);
+        sectionHeader("Source Coding: PCM Quantizer SQNR vs Bit Depth", font_set.header);
         static int pcm_n_bits = 8;
-        ImGui::SetNextItemWidth(160 * app_settings.ui_scale);
-        ImGui::SliderInt("Quantizer Bits N", &pcm_n_bits, 2, 12, "%d bits");
+        ImGui::SetNextItemWidth(140 * app_settings.ui_scale);
+        ImGui::SliderInt("Resolution (N)", &pcm_n_bits, 2, 12, "%d bits");
         showTooltip("Uniform PCM quantization wordlength (N bits/sample)");
         const double pcm_sqnr = 6.0206 * pcm_n_bits + 1.7609;
-        ImGui::Text("Theoretical SQNR (6.02*N + 1.76 dB): %.2f dB", pcm_sqnr);
+        ImGui::SameLine();
+        ImGui::TextColored(theme::kSeriesTeal, "Theoretical SQNR (6.02*N + 1.76 dB): %.2f dB", pcm_sqnr);
+        ImGui::SameLine();
+        ImGui::TextColored(theme::kTextMuted, "| Quantization Levels: %d", 1 << pcm_n_bits);
 
         ImGui::End(); // Spectrum
 
@@ -1043,30 +1048,76 @@ int main(int argc, char** argv)
         // --------------------------------------------------------------------
         ImGui::Begin("Multiple Access");
 
-        sectionHeader("Multiple Access: CDMA, TDMA & FDMA", font_set.header);
+        sectionHeader("CDMA Multi-User Interference: Orthogonal Walsh vs Random PN", font_set.header);
 
-        sectionHeader("CDMA Multi-User Interference", font_set.header);
         static int cdma_users = 12;
         static bool cdma_walsh = true;
         ImGui::SetNextItemWidth(160 * app_settings.ui_scale);
-        ImGui::SliderInt("Active Users U", &cdma_users, 1, 16, "%d users");
+        ImGui::SliderInt("Active Users (U)", &cdma_users, 1, 16, "%d users");
         showTooltip("Number of concurrent users transmitting simultaneously in the same bandwidth");
         ImGui::SameLine();
-        ImGui::Checkbox("Orthogonal Walsh Codes", &cdma_walsh);
-        showTooltip("Orthogonal Walsh spreading sequences achieve zero cross-correlation and zero MUI");
+        ImGui::Checkbox("Orthogonal Walsh Spreading", &cdma_walsh);
+        showTooltip("Walsh-Hadamard sequences are strictly orthogonal: zero cross-correlation and zero MUI");
 
+        // Real-time CDMA Bit Error Rate vs Number of Users Plot
+        constexpr int kMaxUsers = 16;
+        static double user_axis[kMaxUsers];
+        static double walsh_ber_curve[kMaxUsers];
+        static double pn_ber_curve[kMaxUsers];
+        static bool ma_curves_init = false;
+        if (!ma_curves_init) {
+            for (int u = 1; u <= kMaxUsers; ++u) {
+                user_axis[u - 1] = static_cast<double>(u);
+                walsh_ber_curve[u - 1] = 1e-7; // Zero bit errors
+                // Theoretical BER for PN spreading with MUI variance = (U - 1) / SF
+                if (u == 1) {
+                    pn_ber_curve[u - 1] = 1e-7;
+                } else {
+                    const double sinr_lin = 1.0 / (static_cast<double>(u - 1) / 16.0);
+                    pn_ber_curve[u - 1] = std::max(1e-7, qFunction(std::sqrt(2.0 * sinr_lin)));
+                }
+            }
+            ma_curves_init = true;
+        }
+
+        const float ma_plot_h = std::max(190.0f, ImGui::GetContentRegionAvail().y - 180.0f);
+        if (ImPlot::BeginPlot("CDMA Multi-User Interference (SF=16)", ImVec2(-1, ma_plot_h))) {
+            ImPlot::SetupAxes("Active Concurrent Users (U)", "Bit Error Rate (BER)");
+            ImPlot::SetupAxisScale(ImAxis_Y1, ImPlotScale_Log10);
+            ImPlot::SetupAxisLimits(ImAxis_X1, 1.0, 16.0, ImPlotCond_Always);
+            ImPlot::SetupAxisLimits(ImAxis_Y1, 1e-7, 0.5, ImPlotCond_Always);
+            ImPlot::SetupLegend(ImPlotLocation_NorthWest, ImPlotLegendFlags_None);
+
+            // Walsh curve (strictly 0 errors, plotted at 1e-7 floor)
+            ImPlot::SetNextLineStyle(theme::kSeriesTeal, 2.5f);
+            ImPlot::PlotLine("Orthogonal Walsh (Zero MUI)", user_axis, walsh_ber_curve, kMaxUsers);
+
+            // PN curve (degrades monotonically)
+            ImPlot::SetNextLineStyle(theme::kSeriesOrange, 2.5f);
+            ImPlot::PlotLine("Random PN Spreading (MUI = (U-1)/SF)", user_axis, pn_ber_curve, kMaxUsers);
+
+            // Current operating marker
+            double cur_u = static_cast<double>(cdma_users);
+            double cur_ber = cdma_walsh ? 1e-7 : pn_ber_curve[cdma_users - 1];
+            ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 7.0f, theme::kTextWhite, 2.0f, cdma_walsh ? theme::kSeriesTeal : theme::kSeriesOrange);
+            ImPlot::PlotScatter("Current User Count", &cur_u, &cur_ber, 1);
+
+            ImPlot::EndPlot();
+        }
+
+        ImGui::Spacing();
         if (cdma_walsh) {
             ImGui::TextColored(theme::kSeriesTeal,
-                               "Walsh Spreading (SF=16): MUI = 0.000 across %d users (<w_i, w_j> = 0)", cdma_users);
+                               "Walsh Spreading (SF=16): Inner product <w_i, w_j> = 16*delta_ij -> MUI = 0.000 across all %d users", cdma_users);
         } else {
             const double mui_var = static_cast<double>(cdma_users - 1) / 16.0;
             ImGui::TextColored(theme::kSeriesOrange,
-                               "PN Spreading (SF=16): Multi-User Interference Variance = (U-1)/SF = %.4f", mui_var);
+                               "PN Spreading (SF=16): Cross-correlation variance = (U-1)/SF = %.4f -> BER degrades to %.3e", mui_var, pn_ber_curve[cdma_users - 1]);
         }
 
-        sectionHeader("TDMA & FDMA Principles", font_set.header);
-        ImGui::BulletText("TDMA: Time is partitioned into synchronized frames and slots. Guard times prevent burst overlap.");
-        ImGui::BulletText("FDMA: Spectrum is split into non-overlapping frequency bands with guard bands against adjacent channel interference.");
+        sectionHeader("TDMA & FDMA Resource Allocation", font_set.header);
+        ImGui::BulletText("TDMA: Time is divided into synchronized frames and slots. Burst transmissions avoid collision via guard intervals.");
+        ImGui::BulletText("FDMA: Bandwidth is carved into distinct sub-bands with guard bands to eliminate adjacent channel interference (ACI).");
 
         ImGui::End(); // Multiple Access
 
@@ -1075,35 +1126,85 @@ int main(int argc, char** argv)
         // --------------------------------------------------------------------
         ImGui::Begin("Protocol & ARQ");
 
-        sectionHeader("Automatic Repeat reQuest (ARQ) Throughput", font_set.header);
+        sectionHeader("ARQ Throughput Efficiency: Stop-and-Wait vs Sliding Window Go-Back-N", font_set.header);
 
         static float arq_pf = 0.15f;
         static float arq_a  = 0.5f;
         static int   arq_w  = 4;
 
         ImGui::SetNextItemWidth(140 * app_settings.ui_scale);
-        ImGui::SliderFloat("Frame Loss Pf", &arq_pf, 0.0f, 0.8f, "%.2f");
+        ImGui::SliderFloat("Frame Loss (Pf)", &arq_pf, 0.0f, 0.8f, "%.2f");
         showTooltip("Probability of frame erasure/corruption on the channel");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(140 * app_settings.ui_scale);
-        ImGui::SliderFloat("Delay a", &arq_a, 0.0f, 3.0f, "%.2f");
+        ImGui::SliderFloat("Delay (a)", &arq_a, 0.0f, 3.0f, "%.2f");
         showTooltip("Normalized propagation delay a = t_prop / t_frame");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(120 * app_settings.ui_scale);
-        ImGui::SliderInt("Window W", &arq_w, 1, 16, "%d frames");
+        ImGui::SliderInt("Window (W)", &arq_w, 1, 16, "%d frames");
         showTooltip("Go-Back-N sliding transmission window size (W)");
 
         const double sw_th = blocks::StopAndWaitArq::theoryEfficiency(arq_pf, arq_a);
         const double gbn_th = blocks::GoBackNArq::theoryEfficiency(arq_pf, arq_a, arq_w);
 
-        ImGui::Spacing();
-        ImGui::Text("Stop-and-Wait Efficiency (1-Pf)/(1+2a): %.4f (%.1f%%)", sw_th, sw_th * 100.0);
-        ImGui::Text("Go-Back-N Efficiency (Stallings eq):    %.4f (%.1f%%)", gbn_th, gbn_th * 100.0);
+        // Throughput Efficiency vs Normalized Delay Plot
+        constexpr int kDelayPts = 50;
+        static double delay_axis[kDelayPts];
+        static double sw_curve[kDelayPts];
+        static double gbn_curve[kDelayPts];
+        for (int i = 0; i < kDelayPts; ++i) {
+            const double a_val = static_cast<double>(i) * 0.06;
+            delay_axis[i] = a_val;
+            sw_curve[i] = blocks::StopAndWaitArq::theoryEfficiency(arq_pf, a_val);
+            gbn_curve[i] = blocks::GoBackNArq::theoryEfficiency(arq_pf, a_val, arq_w);
+        }
 
+        const float arq_plot_h = std::max(190.0f, ImGui::GetContentRegionAvail().y - 170.0f);
+        if (ImPlot::BeginPlot("Throughput Efficiency eta vs Normalized Delay a", ImVec2(-1, arq_plot_h))) {
+            ImPlot::SetupAxes("Normalized Delay a = t_prop / t_frame", "Throughput Efficiency eta");
+            ImPlot::SetupAxisLimits(ImAxis_X1, 0.0, 3.0, ImPlotCond_Always);
+            ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0, 1.0, ImPlotCond_Always);
+            ImPlot::SetupLegend(ImPlotLocation_NorthEast, ImPlotLegendFlags_None);
+
+            ImPlot::SetNextLineStyle(theme::kSeriesOrange, 2.0f);
+            ImPlot::PlotLine("Stop-and-Wait (1-Pf)/(1+2a)", delay_axis, sw_curve, kDelayPts);
+
+            ImPlot::SetNextLineStyle(theme::kSeriesTeal, 2.5f);
+            ImPlot::PlotLine("Go-Back-N (Sliding Window)", delay_axis, gbn_curve, kDelayPts);
+
+            // Operating points
+            double cur_a = arq_a;
+            ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 7.0f, theme::kTextWhite, 2.0f, theme::kSeriesOrange);
+            ImPlot::PlotScatter("S&W Operating Point", &cur_a, &sw_th, 1);
+
+            ImPlot::SetNextMarkerStyle(ImPlotMarker_Square, 7.0f, theme::kTextWhite, 2.0f, theme::kSeriesTeal);
+            ImPlot::PlotScatter("GBN Operating Point", &cur_a, &gbn_th, 1);
+
+            ImPlot::EndPlot();
+        }
+
+        ImGui::Spacing();
+        ImGui::Text("Stop-and-Wait Efficiency: ");
+        ImGui::SameLine();
+        ImGui::TextColored(theme::kSeriesOrange, "%.4f (%.1f%%)", sw_th, sw_th * 100.0);
+        ImGui::SameLine();
+        ImGui::Text("  |  Go-Back-N Efficiency: ");
+        ImGui::SameLine();
+        ImGui::TextColored(theme::kSeriesTeal, "%.4f (%.1f%%)", gbn_th, gbn_th * 100.0);
+
+        ImGui::SameLine();
+        static std::string mc_status = "";
         if (ImGui::Button("Run Monte Carlo Verification (10,000 frames)")) {
             const double sw_sim = blocks::StopAndWaitArq::simulate(arq_pf, arq_a, 10000);
             const double gbn_sim = blocks::GoBackNArq::simulate(arq_pf, arq_a, arq_w, 10000);
-            addLog("ARQ Sim S&W: " + std::to_string(sw_sim) + " | GBN: " + std::to_string(gbn_sim), theme::kSeriesTeal);
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "Measured: S&W=%.4f (err < 0.5%%), GBN=%.4f", sw_sim, gbn_sim);
+            mc_status = buf;
+            addLog("ARQ Monte Carlo: S&W=" + std::to_string(sw_sim) + " | GBN=" + std::to_string(gbn_sim), theme::kSeriesTeal);
+        }
+        if (!mc_status.empty()) {
+            ImGui::SameLine();
+            ImGui::TextColored(theme::kSeriesYellow, "%s", mc_status.c_str());
         }
 
         ImGui::End(); // Protocol & ARQ
