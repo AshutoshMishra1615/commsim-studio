@@ -313,7 +313,7 @@ int main(int argc, char** argv)
         if (event_logs.size() > 500) event_logs.erase(event_logs.begin());
     };
 
-    addLog("commsim Studio initialized with VS Code Dark+ theme", theme::kSeriesTeal);
+    addLog("commsim Studio initialized | Data Communications Simulation Engine", theme::kSeriesTeal);
     addLog("Simulation thread active at 1.0 Msym/s target", theme::kText);
 
     // Active tab tracking for programmatic switching & focus
@@ -521,7 +521,11 @@ int main(int argc, char** argv)
                     addLog("Shortcuts: Ctrl+1..7 (Tabs), Space (Pause), R (Reset), Ctrl+=/- (Scale), F11 (Fullscreen)", theme::kTextWhite);
                 }
                 if (ImGui::MenuItem("About commsim Studio")) {
-                    addLog("commsim Studio v1.0 -- Real-Time Data Communications Simulation & Visualization", theme::kSeriesTeal);
+                    addLog("commsim Studio -- Data Communications Simulation & Visualization Engine", theme::kSeriesTeal);
+                    addLog("Developed by: Ashutosh Mishra (124EI0048), Tamanna Sahu (124EI0008)", theme::kSeriesBlue);
+                    addLog("             Sabyasachi Karsharma (124EI0032), Aditya Ankush Dhonde (124EI0029)", theme::kSeriesBlue);
+                    addLog("Department of Electronics & Instrumentation Engineering, NIT Rourkela", theme::kTextMuted);
+                    addLog("Course: Data Communications and Networks", theme::kTextMuted);
                 }
                 ImGui::EndMenu();
             }
@@ -541,25 +545,44 @@ int main(int argc, char** argv)
         // --------------------------------------------------------------------
         ImGui::Begin("Simulation Controls");
 
-        sectionHeader("Modulation Scheme", font_set.header);
-        if (ImGui::Combo("##Scheme", &current_scheme_idx, scheme_names, IM_ARRAYSIZE(scheme_names))) {
-            sim.setScheme(scheme_enums[current_scheme_idx]);
-            sim.resetStats();
-            constel_renderer.clear();
-            eye_renderer.clear();
-            app_settings.scheme_idx = current_scheme_idx;
-            addLog("Switched modulation scheme to " + std::string(scheme_names[current_scheme_idx]), theme::kSeriesTeal);
+        // ---- Modulation Scheme (always open) ----
+        if (font_set.header) ImGui::PushFont(font_set.header);
+        bool mod_open = ImGui::CollapsingHeader("Modulation Scheme", ImGuiTreeNodeFlags_DefaultOpen);
+        if (font_set.header) ImGui::PopFont();
+        if (mod_open) {
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::Combo("##Scheme", &current_scheme_idx, scheme_names, IM_ARRAYSIZE(scheme_names))) {
+                sim.setScheme(scheme_enums[current_scheme_idx]);
+                sim.resetStats();
+                constel_renderer.clear();
+                eye_renderer.clear();
+                app_settings.scheme_idx = current_scheme_idx;
+                addLog("Switched modulation scheme to " + std::string(scheme_names[current_scheme_idx]), theme::kSeriesTeal);
+            }
+            showTooltip("Selects digital symbol mapping: BPSK, QPSK, M-PSK, or M-QAM constellation");
         }
-        showTooltip("Selects digital symbol mapping: BPSK, QPSK, M-PSK, or M-QAM constellation");
 
-        sectionHeader("Channel Parameters", font_set.header);
-        ImGui::Text("Eb/N0: %.2f dB", ui_ebn0);
-        if (ImGui::SliderFloat("##EbN0", &ui_ebn0, 0.0f, 16.0f, "%.1f dB")) {
-            sim.setParam("ebn0_db", static_cast<double>(ui_ebn0));
+        ImGui::Spacing();
+        // ---- Channel Parameters ----
+        if (font_set.header) ImGui::PushFont(font_set.header);
+        bool ch_open = ImGui::CollapsingHeader("Channel Parameters", ImGuiTreeNodeFlags_DefaultOpen);
+        if (font_set.header) ImGui::PopFont();
+        if (ch_open) {
+            ImGui::Text("Eb/N0: %.1f dB", ui_ebn0);
+            showTooltip("Energy per bit to noise power spectral density ratio (Eb/N0 in dB)");
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::SliderFloat("##EbN0", &ui_ebn0, 0.0f, 16.0f, "%.1f dB")) {
+                sim.setParam("ebn0_db", static_cast<double>(ui_ebn0));
+            }
+            showTooltip("Energy per bit to noise power spectral density ratio (Eb/N0)");
         }
-        showTooltip("Energy per bit to noise power spectral density ratio (Eb/N0)");
 
-        sectionHeader("Engine State & Rate", font_set.header);
+        ImGui::Spacing();
+        // ---- Engine State & Rate ----
+        if (font_set.header) ImGui::PushFont(font_set.header);
+        bool eng_open = ImGui::CollapsingHeader("Engine State & Rate", ImGuiTreeNodeFlags_DefaultOpen);
+        if (font_set.header) ImGui::PopFont();
+        if (eng_open) {
         bool is_paused = sim.isPaused();
         if (ImGui::Button(is_paused ? " > Resume " : " || Pause ", ImVec2(110 * app_settings.ui_scale, 0))) {
             sim.setPause(!is_paused);
@@ -575,7 +598,14 @@ int main(int argc, char** argv)
         }
         showTooltip("Reset bit error counter and accumulators (R)");
 
-        sectionHeader("Performance & Telemetry", font_set.header);
+        } // end Engine State & Rate
+
+        ImGui::Spacing();
+        // ---- Performance & Telemetry ----
+        if (font_set.header) ImGui::PushFont(font_set.header);
+        bool perf_open = ImGui::CollapsingHeader("Performance & Telemetry", ImGuiTreeNodeFlags_DefaultOpen);
+        if (font_set.header) ImGui::PopFont();
+        if (perf_open) {
         ImGui::Text("Render Rate:       %.1f FPS", io.Framerate);
         showTooltip("Viewer GUI and GPU density redraw rate");
         ImGui::Text("Sim Throughput:    %.2f Msym/s", sim_rate > 0.0 ? sim_rate : 1.0);
@@ -584,12 +614,52 @@ int main(int argc, char** argv)
         showTooltip("Time from parameter slider interaction to applied DSP frame");
         ImGui::ProgressBar(static_cast<float>((sim_rate > 0.0 ? sim_rate : 1.0) / 1.5), ImVec2(-1, 6), "");
 
-        sectionHeader("Accumulated Metrics", font_set.header);
+        } // end Performance & Telemetry
+
+        ImGui::Spacing();
+        // ---- Accumulated Metrics ----
+        if (font_set.header) ImGui::PushFont(font_set.header);
+        bool acc_open = ImGui::CollapsingHeader("Accumulated Metrics", ImGuiTreeNodeFlags_DefaultOpen);
+        if (font_set.header) ImGui::PopFont();
+        if (acc_open) {
         ImGui::Text("Processed Bits:   %llu", static_cast<unsigned long long>(ber_snap.total));
         ImGui::Text("Bit Errors:       %llu", static_cast<unsigned long long>(ber_snap.errors));
-        ImGui::Text("Measured BER:     %.3e", measured_ber);
-        ImGui::Text("Theoretical BER:  %.3e", theory_ber);
+        // Color-code BER: green < 1e-4, yellow 1e-4 to 1e-2, red > 1e-2
+        const ImVec4 ber_color = (measured_ber < 1e-4 && measured_ber > 0.0)
+            ? theme::kSeriesTeal
+            : (measured_ber < 1e-2 ? theme::kSeriesYellow : theme::kSeriesRed);
+        ImGui::Text("Measured BER:  ");
+        ImGui::SameLine();
+        ImGui::TextColored(measured_ber > 0.0 ? ber_color : theme::kTextMuted,
+                           "%.3e", measured_ber > 0.0 ? measured_ber : 0.0);
+        ImGui::Text("Theory BER:    ");
+        ImGui::SameLine();
+        ImGui::TextColored(theme::kSeriesBlue, "%.3e", theory_ber);
 
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        if (ImGui::CollapsingHeader("About This Project")) {
+            ImGui::PushStyleColor(ImGuiCol_Text, theme::kSeriesTeal);
+            ImGui::TextWrapped("commsim-studio");
+            ImGui::PopStyleColor();
+            ImGui::PushStyleColor(ImGuiCol_Text, theme::kTextMuted);
+            ImGui::TextWrapped("Real-Time Data Communications Simulation & GPU Visualization");
+            ImGui::Spacing();
+            ImGui::TextUnformatted("Developers:");
+            ImGui::PopStyleColor();
+            ImGui::BulletText("Ashutosh Mishra (124EI0048)");
+            ImGui::BulletText("Tamanna Sahu (124EI0008)");
+            ImGui::BulletText("Sabyasachi Karsharma (124EI0032)");
+            ImGui::BulletText("Aditya Ankush Dhonde (124EI0029)");
+            ImGui::Spacing();
+            ImGui::PushStyleColor(ImGuiCol_Text, theme::kTextMuted);
+            ImGui::TextWrapped("Dept. of Electronics & Instrumentation Engineering, NIT Rourkela");
+            ImGui::TextWrapped("Course: Data Communications and Networks");
+            ImGui::PopStyleColor();
+        }
+
+        } // end Accumulated Metrics
         ImGui::End(); // Simulation Controls
 
         // Handle programmatic tab focus
